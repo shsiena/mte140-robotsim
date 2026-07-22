@@ -16,6 +16,8 @@
 
 import {
   CELL_CM,
+  ROBOT_LENGTH_CM,
+  ROBOT_WIDTH_CM,
   SENSOR_HALF_CONE_DEG,
   SENSOR_FORWARD_CM,
   SENSOR_RIGHT_CM,
@@ -69,7 +71,26 @@ import type { Robot } from "./types";
 //  No ray fan: each cell is tested directly against the cone, so there are no
 //  divergence gaps at range.
 //
-//  (Next step, not done here: run pathfinding over the resulting grid.)
+//  Pathfinding on top (monotone N/E only). After each in-place sweep we derive
+//  three clearance grids from the occupancy map:
+//    - reachable / "turn" cells (orange): full-rotation clearance.
+//    - drive-up cells (blue): the robot fits facing north — safe to drive north.
+//    - drive-east cells (pink): the robot fits facing east — safe to drive east.
+//  (A turn cell fits at every heading, so turn ⊆ up ∩ east; the blue/pink cells
+//   that matter are the narrow gaps you can drive through but not rotate in.)
+//
+//  Then each round:
+//    1. Try to find a monotone north/east path to the goal that drives north
+//       only through up-cells, east only through east-cells, and makes every
+//       turn on a turn-cell — minimising the number of turns. If one exists,
+//       drive it straight to the goal, no further scanning.
+//    2. Otherwise take one exploration step: go north or east, whichever has the
+//       longer run of orange (turn) cells ahead — so we can spin to scan at the
+//       far end — up to the step cap or the edge of that zone. Sweep again into
+//       the SAME grid and repeat.
+//
+//  Deliberately simple: the explore rule is pure greedy (no dead-end lookahead),
+//  so it can still wall itself into a pocket. The point is to watch how it does.
 // ===========================================================================
 
 interface Vec2 {
@@ -78,25 +99,454 @@ interface Vec2 {
 }
 
 const SWEEP_STEP_DEG = 1; // sensor sweep resolution
-const SWEEP_TOTAL_DEG = 360; // a full turn maps everything around the start
+const SWEEP_TOTAL_DEG = 360; // full spin at each waypoint before re-planning
 const CLEAR_MARGIN_CM = 1.5; // stop clearing just short of the hit surface
-const START_CLEAR_RADIUS_CM = 14; // guaranteed-clear bubble around the start
+const START_CLEAR_RADIUS_CM = 20; // guaranteed-clear bubble around the start
+
+// Inflated half-footprint (robot half-extents + a safety margin). Facing north
+// the length runs along y and the width along x; facing east it's swapped.
+const CLEARANCE_MARGIN_CM = 1;
+const HALF_LEN_CM = ROBOT_LENGTH_CM / 2 + CLEARANCE_MARGIN_CM; // 12
+const HALF_WID_CM = ROBOT_WIDTH_CM / 2 + CLEARANCE_MARGIN_CM; // 9
+// Circumscribed radius of that inflated footprint: the disc it sweeps when it
+// spins. A "turn" cell needs everything within this radius clear — which is why
+// a turn cell also fits at every fixed heading (turn ⊆ up ∩ east).
+const ROBOT_RADIUS_CM = Math.hypot(HALF_LEN_CM, HALF_WID_CM); // 15
+
+const STEP_MAX_CM = 10; // furthest we commit to in one greedy step
+const MIN_STEP_CM = CELL_CM; // a step shorter than this isn't worth taking
+const MAX_STEPS = 500; // hard cap so a stuck run can't loop forever
 
 export async function run(r: Robot): Promise<void> {
-  // 1. Everything is a potential obstacle until proven clear.
+  // Everything is a potential obstacle until proven clear; clear the start bubble.
   r.grid.fill(true);
-
-  // 2. The robot can't be sitting inside an obstacle — clear its start bubble.
   clearStartZone(r);
 
-  // 3. Sweep in place, clearing visible free space at each sample.
+  // Each round: spin a full 360° at the current waypoint, rebuild the clearance
+  // grids, then advance ONE segment toward the goal — scanning the whole way.
+  // Re-planning at every waypoint lets a shorter path appear as the map fills in.
+  for (let i = 0; i < MAX_STEPS; i++) {
+    await scan(r);
+    computeCells(r);
+
+    const p = r.position();
+    const goal = r.goal();
+    if (Math.hypot(goal.x - p.x, goal.y - p.y) <= goal.radius) {
+      r.log("goal reached");
+      return;
+    }
+
+    // Choose the next move from a FULL multi-move path:
+    //   1. the minimal-turn path to the goal, if one exists; else
+    //   2. the path to the reachable yellow cell closest to the goal (Euclidean)
+    //      — reached over several valid moves, not just a single straight move.
+    // Either way we drive only its first segment, then loop to re-scan/re-plan.
+    let path = findPath(r);
+    if (path) {
+      r.log("path to goal — advancing to next waypoint");
+    } else {
+      path = findGreedyPath(r);
+      if (path) r.log("no goal path — advancing toward closest reachable yellow cell");
+    }
+
+    if (path) {
+      await driveToNextWaypoint(r, path);
+      continue;
+    }
+
+    // Last resort only: no reachable yellow cell is closer to the goal than we
+    // already are, so there's nothing to plan toward until we reveal more map.
+    // Take one step along the longer orange run to get a fresh vantage/scan.
+    const northRun = reachableRun(r, p, 0, 1, Math.max(0, goal.y - p.y));
+    const eastRun = reachableRun(r, p, 1, 0, Math.max(0, goal.x - p.x));
+    if (northRun < MIN_STEP_CM && eastRun < MIN_STEP_CM) {
+      r.log("stuck — no clear north or east step");
+      return;
+    }
+    if (northRun >= eastRun) {
+      await turnScanning(r, 0); // face north
+      await driveScanning(r, Math.min(STEP_MAX_CM, northRun));
+    } else {
+      await turnScanning(r, 90); // face east
+      await driveScanning(r, Math.min(STEP_MAX_CM, eastRun));
+    }
+  }
+
+  r.log("step budget exhausted");
+}
+
+interface Cell {
+  cx: number;
+  cy: number;
+}
+
+/** Goal position projected onto its grid cell. */
+function goalCell(r: Robot): Cell {
+  const g = r.goal();
+  return {
+    cx: Math.max(0, Math.min(r.grid.cols - 1, Math.floor(g.x / CELL_CM))),
+    cy: Math.max(0, Math.min(r.grid.rows - 1, Math.floor(g.y / CELL_CM))),
+  };
+}
+
+/**
+ * Fill the minimal-turn DP over the [start .. start+(W,H)] box. Drives north
+ * only through up-cells, east only through east-cells, and only turns on
+ * turn-cells. cost[i][j] = [turnsIfArrivedEast, turnsIfArrivedNorth]; Infinity
+ * means no valid path reaches that cell that way. O(W*H) time and memory — no
+ * priority queue, no per-node heap, so it stays tiny for the VEX port.
+ */
+function buildCostDP(
+  r: Robot,
+  s: Cell,
+  W: number,
+  H: number,
+): [number, number][][] {
+  const up = (i: number, j: number) => r.driveUp.get(s.cx + i, s.cy + j);
+  const east = (i: number, j: number) => r.driveEast.get(s.cx + i, s.cy + j);
+  const turn = (i: number, j: number) => r.reachable.get(s.cx + i, s.cy + j);
+
+  const cost: [number, number][][] = [];
+  for (let i = 0; i <= W; i++) {
+    cost[i] = [];
+    for (let j = 0; j <= H; j++) cost[i][j] = [Infinity, Infinity];
+  }
+  cost[0][0] = [0, 0]; // start (a turn cell): first move never counts as a turn
+
+  for (let j = 0; j <= H; j++) {
+    for (let i = 0; i <= W; i++) {
+      if (i === 0 && j === 0) continue;
+      let e = Infinity;
+      let n = Infinity;
+      // Arrive moving east into (i,j): the cell must be drivable facing east,
+      // and any east<-north turn must happen on a turn cell at the predecessor.
+      if (i > 0 && east(i, j)) {
+        const p = cost[i - 1][j];
+        e = Math.min(p[0], turn(i - 1, j) ? p[1] + 1 : Infinity);
+      }
+      // Arrive moving north into (i,j): cell must be drivable facing north.
+      if (j > 0 && up(i, j)) {
+        const p = cost[i][j - 1];
+        n = Math.min(p[1], turn(i, j - 1) ? p[0] + 1 : Infinity);
+      }
+      cost[i][j] = [e, n];
+    }
+  }
+  return cost;
+}
+
+/** Backtrack the DP from box-offset (I,J), arrived via dEnd (0=E,1=N), to the
+ *  start, returning the absolute cell path start..target. */
+function backtrack(
+  cost: [number, number][][],
+  s: Cell,
+  I: number,
+  J: number,
+  dEnd: number,
+): Cell[] {
+  const cells: Cell[] = [];
+  let i = I;
+  let j = J;
+  let d = dEnd;
+  while (true) {
+    cells.push({ cx: s.cx + i, cy: s.cy + j });
+    if (i === 0 && j === 0) break;
+    if (d === 0) {
+      const cur = cost[i][j][0];
+      d = cost[i - 1][j][0] === cur ? 0 : 1; // predecessor reached E or N?
+      i -= 1;
+    } else {
+      const cur = cost[i][j][1];
+      d = cost[i][j - 1][1] === cur ? 1 : 0;
+      j -= 1;
+    }
+  }
+  cells.reverse();
+  return cells;
+}
+
+/** Minimal-turn N/E path from the robot's cell to the goal cell, or null. */
+function findPath(r: Robot): Cell[] | null {
+  const s = r.cell();
+  const g = goalCell(r);
+  // Monotone N/E can only reach a goal that is up and to the right.
+  if (g.cx < s.cx || g.cy < s.cy) return null;
+  // Must be able to pick an initial heading at the start (a turn cell).
+  if (!r.reachable.get(s.cx, s.cy)) return null;
+
+  const W = g.cx - s.cx;
+  const H = g.cy - s.cy;
+  const cost = buildCostDP(r, s, W, H);
+  const [gE, gN] = cost[W][H];
+  if (!Number.isFinite(Math.min(gE, gN))) return null;
+  return backtrack(cost, s, W, H, gE <= gN ? 0 : 1);
+}
+
+/**
+ * Greedy-travel variant. Among turn (orange) cells reachable by a valid path,
+ * return a path to the one whose centre is closest to the goal — but only if it
+ * is strictly closer to the goal than the robot's own cell already is. Returns
+ * null otherwise, so the caller falls back to an exploration step.
+ */
+function findGreedyPath(r: Robot): Cell[] | null {
+  const s = r.cell();
+  const g = goalCell(r);
+  if (g.cx < s.cx || g.cy < s.cy) return null;
+  if (!r.reachable.get(s.cx, s.cy)) return null;
+
+  const W = g.cx - s.cx;
+  const H = g.cy - s.cy;
+  const cost = buildCostDP(r, s, W, H);
+
+  const goal = r.goal();
+  const distToGoal = (cx: number, cy: number) =>
+    Math.hypot(goal.x - (cx + 0.5) * CELL_CM, goal.y - (cy + 0.5) * CELL_CM);
+  const d0 = distToGoal(s.cx, s.cy); // robot's own cell distance to the goal
+
+  let best: {
+    i: number;
+    j: number;
+    d: number;
+    dist: number;
+    turns: number;
+  } | null = null;
+  for (let i = 0; i <= W; i++) {
+    for (let j = 0; j <= H; j++) {
+      if (!r.reachable.get(s.cx + i, s.cy + j)) continue; // orange tiles only
+      const [e, n] = cost[i][j];
+      const turns = Math.min(e, n);
+      if (!Number.isFinite(turns)) continue; // not reachable via a valid path
+      const dist = distToGoal(s.cx + i, s.cy + j);
+      if (
+        best === null ||
+        dist < best.dist - 1e-9 ||
+        (Math.abs(dist - best.dist) < 1e-9 && turns < best.turns)
+      ) {
+        best = { i, j, d: e <= n ? 0 : 1, dist, turns };
+      }
+    }
+  }
+
+  if (!best || best.dist >= d0 - 1e-6) return null; // nothing strictly closer
+  return backtrack(cost, s, best.i, best.j, best.d);
+}
+
+/** Reduce a cell path to just its corners (direction-change points). */
+function cornerCells(cells: Cell[]): Cell[] {
+  if (cells.length <= 2) return cells.slice();
+  const out: Cell[] = [cells[0]];
+  for (let k = 1; k < cells.length - 1; k++) {
+    const before = cells[k].cx !== cells[k - 1].cx ? "E" : "N";
+    const after = cells[k + 1].cx !== cells[k].cx ? "E" : "N";
+    if (before !== after) out.push(cells[k]);
+  }
+  out.push(cells[cells.length - 1]);
+  return out;
+}
+
+/**
+ * Drive to the path's next turn point (or onto the goal, if the first segment
+ * reaches it), scanning the whole way. The caller then spins and re-plans, so a
+ * shorter path can appear before we commit any further.
+ */
+async function driveToNextWaypoint(r: Robot, cells: Cell[]): Promise<void> {
+  const gc = goalCell(r);
+  const corners = cornerCells(cells);
+  if (corners.length >= 2) {
+    const from = corners[0];
+    const to = corners[1];
+    if (to.cx !== from.cx) {
+      await turnScanning(r, 90); // east segment
+      await driveScanning(r, (to.cx + 0.5) * CELL_CM - r.position().x);
+    } else {
+      await turnScanning(r, 0); // north segment
+      await driveScanning(r, (to.cy + 0.5) * CELL_CM - r.position().y);
+    }
+    if (to.cx === gc.cx && to.cy === gc.cy) await nudgeToGoal(r);
+  } else {
+    // Path is a single cell (already on the goal cell) — settle onto the goal.
+    await nudgeToGoal(r);
+  }
+}
+
+/**
+ * Final approach onto the goal (east then north), scanning. Aims for the goal
+ * tile's centre so the robot stays tile-aligned; falls back to the exact goal
+ * point only if the tile centre wouldn't count as reaching it.
+ */
+async function nudgeToGoal(r: Robot): Promise<void> {
+  const goal = r.goal();
+  const gc = goalCell(r);
+  const cx = (gc.cx + 0.5) * CELL_CM;
+  const cy = (gc.cy + 0.5) * CELL_CM;
+  const useCenter = Math.hypot(goal.x - cx, goal.y - cy) <= goal.radius;
+  const tx = useCenter ? cx : goal.x;
+  const ty = useCenter ? cy : goal.y;
+  if (tx - r.position().x > 0.1) {
+    await turnScanning(r, 90);
+    await driveScanning(r, tx - r.position().x);
+  }
+  if (ty - r.position().y > 0.1) {
+    await turnScanning(r, 0);
+    await driveScanning(r, ty - r.position().y);
+  }
+}
+
+/** Drive forward `cm`, carving free cells every rendered frame. */
+async function driveScanning(r: Robot, cm: number): Promise<void> {
+  if (cm <= 1e-6) return;
+  let done = false;
+  const motion = r.driveFor(cm);
+  motion.then(
+    () => {
+      done = true;
+    },
+    () => {
+      done = true; // cancelled (e.g. goal captured); re-thrown by `await motion`
+    },
+  );
+  while (!done) {
+    await r.step();
+    markFree(r);
+  }
+  await motion;
+}
+
+/** Rotate to `headingDeg`, carving free cells every rendered frame. */
+async function turnScanning(r: Robot, headingDeg: number): Promise<void> {
+  let done = false;
+  const motion = r.turnTo(headingDeg);
+  motion.then(
+    () => {
+      done = true;
+    },
+    () => {
+      done = true;
+    },
+  );
+  while (!done) {
+    await r.step();
+    markFree(r);
+  }
+  await motion;
+}
+
+/**
+ * Full 360° sweep at a waypoint, carving known-clear cells into r.grid. We spin
+ * all the way round — not just the quadrant we travel into — because the
+ * clearance grids depend on obstacles on every side of a candidate cell:
+ * learning what's behind/beside us unlocks cells ahead as reachable, and it
+ * gives the freshest possible map to re-plan on.
+ */
+async function scan(r: Robot): Promise<void> {
   markFree(r);
   for (let swept = 0; swept < SWEEP_TOTAL_DEG; swept += SWEEP_STEP_DEG) {
     await r.turn(SWEEP_STEP_DEG);
     markFree(r);
   }
+}
 
-  r.log("sweep complete");
+/**
+ * Rebuild the three clearance grids from the occupancy map. A cell must first be
+ * known-clear itself, then:
+ *   - reachable (orange): nothing known-blocked within the rotation disc.
+ *   - driveUp (blue): the robot's north-facing footprint (width along x, length
+ *     along y) is clear — safe to drive north through.
+ *   - driveEast (pink): the east-facing footprint (length along x, width along
+ *     y) is clear — safe to drive east through.
+ * Out-of-bounds neighbours are ignored (board edges don't collide).
+ */
+function computeCells(r: Robot): void {
+  const rCells = Math.ceil(ROBOT_RADIUS_CM / CELL_CM);
+  const r2 = ROBOT_RADIUS_CM * ROBOT_RADIUS_CM;
+  r.reachable.fill(false);
+  r.driveUp.fill(false);
+  r.driveEast.fill(false);
+  for (let cy = 0; cy < r.grid.rows; cy++) {
+    for (let cx = 0; cx < r.grid.cols; cx++) {
+      if (r.grid.get(cx, cy)) continue; // the cell itself must be known-clear
+      if (rotationClear(r, cx, cy, rCells, r2)) r.reachable.set(cx, cy, true);
+      if (footprintClear(r, cx, cy, HALF_WID_CM, HALF_LEN_CM)) {
+        r.driveUp.set(cx, cy, true); // facing north
+      }
+      if (footprintClear(r, cx, cy, HALF_LEN_CM, HALF_WID_CM)) {
+        r.driveEast.set(cx, cy, true); // facing east
+      }
+    }
+  }
+}
+
+/** True if no known-blocked cell lies within the robot's radius of (cx, cy). */
+function rotationClear(
+  r: Robot,
+  cx: number,
+  cy: number,
+  rCells: number,
+  r2: number,
+): boolean {
+  for (let dy = -rCells; dy <= rCells; dy++) {
+    for (let dx = -rCells; dx <= rCells; dx++) {
+      const nx = cx + dx;
+      const ny = cy + dy;
+      if (nx < 0 || ny < 0 || nx >= r.grid.cols || ny >= r.grid.rows) continue;
+      if (!r.grid.get(nx, ny)) continue; // clear neighbour — fine
+      // Blocked/unknown neighbour: does it fall inside the rotation disc?
+      const wx = dx * CELL_CM;
+      const wy = dy * CELL_CM;
+      if (wx * wx + wy * wy <= r2) return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * True if the robot's axis-aligned footprint of half-extents (halfX, halfY) cm,
+ * centred on (cx, cy), overlaps no known-blocked cell.
+ */
+function footprintClear(
+  r: Robot,
+  cx: number,
+  cy: number,
+  halfX: number,
+  halfY: number,
+): boolean {
+  const hxCells = Math.ceil(halfX / CELL_CM);
+  const hyCells = Math.ceil(halfY / CELL_CM);
+  for (let dy = -hyCells; dy <= hyCells; dy++) {
+    for (let dx = -hxCells; dx <= hxCells; dx++) {
+      const nx = cx + dx;
+      const ny = cy + dy;
+      if (nx < 0 || ny < 0 || nx >= r.grid.cols || ny >= r.grid.rows) continue;
+      if (!r.grid.get(nx, ny)) continue; // clear neighbour — fine
+      if (Math.abs(dx * CELL_CM) <= halfX && Math.abs(dy * CELL_CM) <= halfY) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+/**
+ * March from `origin` along a unit direction and return how far we can go while
+ * staying on reachable (orange) cells, up to `maxCm`.
+ */
+function reachableRun(
+  r: Robot,
+  origin: Vec2,
+  dirX: number,
+  dirY: number,
+  maxCm: number,
+): number {
+  const inc = CELL_CM / 2;
+  let last = 0;
+  for (let d = 0; d <= maxCm + 1e-9; d += inc) {
+    const cx = Math.floor((origin.x + dirX * d) / CELL_CM);
+    const cy = Math.floor((origin.y + dirY * d) / CELL_CM);
+    if (cx < 0 || cy < 0 || cx >= r.grid.cols || cy >= r.grid.rows) break;
+    if (!r.reachable.get(cx, cy)) break;
+    last = d;
+  }
+  return last;
 }
 
 /** World position of the IR sensor origin for the current pose. */

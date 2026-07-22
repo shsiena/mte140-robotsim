@@ -413,6 +413,22 @@ class RobotApi implements Robot {
     return this.sim.world.overlay;
   }
 
+  get reachable(): BoolGrid {
+    return this.sim.world.reachable;
+  }
+
+  get driveUp(): BoolGrid {
+    return this.sim.world.driveUp;
+  }
+
+  get driveEast(): BoolGrid {
+    return this.sim.world.driveEast;
+  }
+
+  get greedyTravel(): boolean {
+    return this.sim.world.greedyTravel;
+  }
+
   log(...args: unknown[]): void {
     const line = args
       .map((a) => (typeof a === "string" ? a : JSON.stringify(a)))

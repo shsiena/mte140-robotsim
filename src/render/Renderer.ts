@@ -25,6 +25,8 @@ export class Renderer {
 
   private gridG = new Graphics();
   private overlayG = new Graphics();
+  private driveG = new Graphics();
+  private reachableG = new Graphics();
   private trailG = new Graphics();
   private goalG = new Graphics();
   private obstacleG = new Graphics();
@@ -52,6 +54,8 @@ export class Renderer {
     this.world.addChild(
       this.gridG,
       this.overlayG,
+      this.driveG,
+      this.reachableG,
       this.trailG,
       this.goalG,
       this.obstacleG,
@@ -91,6 +95,8 @@ export class Renderer {
     this.layout(sim);
     this.drawGrid(sim);
     this.drawOverlay(sim);
+    this.drawDriveCells(sim);
+    this.drawReachable(sim);
     this.drawTrail(sim);
     this.drawGoal(sim);
     this.drawObstacles(sim);
@@ -130,6 +136,44 @@ export class Renderer {
       }
     }
     g.fill({ color: COLORS.overlayTrue, alpha: OVERLAY_ALPHA });
+  }
+
+  private drawDriveCells(sim: Simulation): void {
+    const g = this.driveG.clear();
+    const up = sim.world.driveUp.raw;
+    const east = sim.world.driveEast.raw;
+    const reach = sim.world.reachable.raw;
+    // Only draw the "extra" gap cells (drivable but not a turn cell), so orange
+    // turn cells stay distinct.
+    for (let cy = 0; cy < sim.world.rows; cy++) {
+      for (let cx = 0; cx < sim.world.cols; cx++) {
+        if (east[cy][cx] && !reach[cy][cx]) {
+          g.rect(cx * CELL_CM, cy * CELL_CM, CELL_CM, CELL_CM);
+        }
+      }
+    }
+    g.fill({ color: COLORS.overlayDriveEast, alpha: OVERLAY_ALPHA });
+    for (let cy = 0; cy < sim.world.rows; cy++) {
+      for (let cx = 0; cx < sim.world.cols; cx++) {
+        if (up[cy][cx] && !reach[cy][cx]) {
+          g.rect(cx * CELL_CM, cy * CELL_CM, CELL_CM, CELL_CM);
+        }
+      }
+    }
+    g.fill({ color: COLORS.overlayDriveUp, alpha: OVERLAY_ALPHA });
+  }
+
+  private drawReachable(sim: Simulation): void {
+    const g = this.reachableG.clear();
+    const raw = sim.world.reachable.raw;
+    for (let cy = 0; cy < sim.world.rows; cy++) {
+      for (let cx = 0; cx < sim.world.cols; cx++) {
+        if (raw[cy][cx]) {
+          g.rect(cx * CELL_CM, cy * CELL_CM, CELL_CM, CELL_CM);
+        }
+      }
+    }
+    g.fill({ color: COLORS.overlayReachable, alpha: OVERLAY_ALPHA });
   }
 
   private drawTrail(sim: Simulation): void {

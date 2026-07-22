@@ -53,6 +53,20 @@ export interface Robot {
 
   // --- your internal world model (rendered live as a cell overlay) ---------
   readonly grid: BoolGrid;
+  /**
+   * A second boolean grid, drawn as an orange overlay. Intended for cells the
+   * robot centre can occupy with full-rotation clearance ("turn" cells), but
+   * it's yours to use however you like.
+   */
+  readonly reachable: BoolGrid;
+  /** Extra overlay (blue): cells the robot fits in facing north (drive-north). */
+  readonly driveUp: BoolGrid;
+  /** Extra overlay (pink): cells the robot fits in facing east (drive-east). */
+  readonly driveEast: BoolGrid;
+
+  // --- run options (from the UI) -------------------------------------------
+  /** "Greedy travel" toggle: hop to the closest reachable turn cell to goal. */
+  readonly greedyTravel: boolean;
 
   /** Print to the telemetry log / console for debugging. */
   log(...args: unknown[]): void;

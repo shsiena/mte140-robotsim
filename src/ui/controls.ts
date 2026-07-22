@@ -66,6 +66,9 @@ export class EditorUI {
         </label>
         <span id="speedVal">1.0×</span>
       </div>
+      <div class="row">
+        <label><input id="greedy" type="checkbox" /> Greedy travel</label>
+      </div>
 
       <h2>Status</h2>
       <div class="row"><span id="status" class="status idle">idle</span></div>
@@ -120,6 +123,12 @@ export class EditorUI {
     speed.oninput = () => {
       this.simSpeed = Number(speed.value);
       this.$("#speedVal").textContent = `${this.simSpeed.toFixed(1)}×`;
+    };
+
+    const greedy = this.$("#greedy") as HTMLInputElement;
+    greedy.checked = w.greedyTravel;
+    greedy.onchange = () => {
+      w.greedyTravel = greedy.checked;
     };
 
     this.$("#applySize").onclick = () => this.applySize();

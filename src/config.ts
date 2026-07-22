@@ -51,6 +51,9 @@ export const COLORS = {
   goal: 0x4fd98a,
   trail: 0x7a8aa8,
   overlayTrue: 0x9b6bff, // internal-matrix cell = true
+  overlayReachable: 0xff9b3d, // rotation-clear ("turn") cell — orange
+  overlayDriveUp: 0x5b8cff, // fits facing north (drive-north gap) — blue
+  overlayDriveEast: 0xff6ec7, // fits facing east (drive-east gap) — pink
 } as const;
 
 // Alpha for the boolean-matrix overlay tint.
