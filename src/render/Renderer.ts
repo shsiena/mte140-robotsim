@@ -5,15 +5,15 @@
 import { Application, Container, Graphics, type PointData } from "pixi.js";
 import { CELL_CM, COLORS, OVERLAY_ALPHA, SENSOR_MAX_CM } from "../config";
 import {
-  add,
+  // add,
   headingToVec,
-  rightVec,
+  // rightVec,
   type Vec2,
 } from "../sim/coords";
 import { type Box, boxCorners, robotCorners, sensorOrigin } from "../sim/geometry";
 import type { Simulation } from "../sim/Simulation";
 import {
-  ROBOT_LENGTH_CM,
+  // ROBOT_LENGTH_CM,
   SENSOR_HALF_CONE_DEG,
 } from "../config";
 
@@ -263,15 +263,15 @@ export class Renderer {
       .stroke({ width: this.px(1.5), color: COLORS.robotOutline });
 
     // Heading marker: centre to the middle of the front edge.
-    const fwd = headingToVec(sim.heading);
-    const nose = add(sim.center, fwd, ROBOT_LENGTH_CM / 2);
-    g.moveTo(sim.center.x, sim.center.y)
-      .lineTo(nose.x, nose.y)
-      .stroke({ width: this.px(2), color: COLORS.heading });
+    // const fwd = headingToVec(sim.heading);
+    // const nose = add(sim.center, fwd, ROBOT_LENGTH_CM / 2);
+    // g.moveTo(sim.center.x, sim.center.y)
+      // .lineTo(nose.x, nose.y)
+      // .stroke({ width: this.px(2), color: COLORS.heading });
 
     // Small tick marking the robot's right side (so orientation is unambiguous).
-    const right = rightVec(sim.heading);
-    const rp = add(sim.center, right, 5);
-    g.circle(rp.x, rp.y, this.px(2)).fill({ color: COLORS.heading });
+    // const right = rightVec(sim.heading);
+    // const rp = add(sim.center, right, 5);
+    // g.circle(rp.x, rp.y, this.px(2)).fill({ color: COLORS.heading });
   }
 }
