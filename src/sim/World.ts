@@ -53,8 +53,8 @@ export class World {
   driveUp: MatrixGrid;
   /** Cells the robot fits in facing east — drive-east clearance (pink). */
   driveEast: MatrixGrid;
-  /** UI toggle passed to the program: hop to the closest reachable turn cell. */
-  greedyTravel = false;
+  /** Display toggle: draw the obstacle boxes. */
+  showObstacles = true;
 
   constructor(cols = 40, rows = 30) {
     this.cols = cols;
@@ -63,10 +63,11 @@ export class World {
     this.reachable = new MatrixGrid(cols, rows);
     this.driveUp = new MatrixGrid(cols, rows);
     this.driveEast = new MatrixGrid(cols, rows);
-    // Sensible defaults: start centred in a cell near the bottom-left facing
-    // north, goal top-right. (Centre, not a grid corner, so the robot stays
-    // tile-aligned as it drives.)
-    this.start = { x: 3.5 * CELL_CM, y: 3.5 * CELL_CM, heading: 0 };
+    // Sensible defaults: start near the bottom-left facing north, goal
+    // top-right. Cell-centred, not on a grid corner, so the robot stays
+    // tile-aligned as it drives. Far enough from the edges that the body — which
+    // trails PIVOT_FROM_REAR_CM behind the pose point — starts on the board.
+    this.start = { x: 4.5 * CELL_CM, y: 8.5 * CELL_CM, heading: 0 };
     this.goal = {
       x: (cols - 3) * CELL_CM,
       y: (rows - 3) * CELL_CM,

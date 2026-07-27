@@ -197,16 +197,21 @@ export class Renderer {
 
   private drawObstacles(sim: Simulation): void {
     const g = this.obstacleG.clear();
-    for (const o of sim.world.obstacles) {
-      g.poly(boxCorners(o).flatMap((c) => [c.x, c.y]));
-    }
-    g.fill({ color: COLORS.obstacle, alpha: 0.85 });
+    // Hiding them is display-only: they still collide, and the editor still
+    // picks them up. The draft box stays visible so dragging one out has
+    // feedback either way.
+    if (sim.world.showObstacles) {
+      for (const o of sim.world.obstacles) {
+        g.poly(boxCorners(o).flatMap((c) => [c.x, c.y]));
+      }
+      g.fill({ color: COLORS.obstacle, alpha: 0.85 });
 
-    if (this.selectedBox) {
-      g.poly(boxCorners(this.selectedBox).flatMap((c) => [c.x, c.y])).stroke({
-        width: this.px(2),
-        color: COLORS.robotOutline,
-      });
+      if (this.selectedBox) {
+        g.poly(boxCorners(this.selectedBox).flatMap((c) => [c.x, c.y])).stroke({
+          width: this.px(2),
+          color: COLORS.robotOutline,
+        });
+      }
     }
     if (this.draftBox) {
       const d = this.draftBox;
@@ -219,7 +224,7 @@ export class Renderer {
 
   private drawCone(sim: Simulation): void {
     const g = this.coneG.clear();
-    const origin = sensorOrigin(sim.center, sim.heading);
+    const origin = sensorOrigin(sim.pivot, sim.heading);
     const reading = sim.lastSensor;
     const range = Number.isFinite(reading)
       ? Math.min(reading, SENSOR_MAX_CM)
@@ -257,21 +262,21 @@ export class Renderer {
 
   private drawRobot(sim: Simulation): void {
     const g = this.robotG.clear();
-    const corners = robotCorners(sim.center, sim.heading);
+    const corners = robotCorners(sim.pivot, sim.heading);
     g.poly(corners.flatMap((c) => [c.x, c.y]))
       .fill({ color: COLORS.robot, alpha: 0.9 })
       .stroke({ width: this.px(1.5), color: COLORS.robotOutline });
 
     // Heading marker: centre to the middle of the front edge.
     // const fwd = headingToVec(sim.heading);
-    // const nose = add(sim.center, fwd, ROBOT_LENGTH_CM / 2);
-    // g.moveTo(sim.center.x, sim.center.y)
+    // const nose = add(sim.pivot, fwd, ROBOT_LENGTH_CM / 2);
+    // g.moveTo(sim.pivot.x, sim.pivot.y)
       // .lineTo(nose.x, nose.y)
       // .stroke({ width: this.px(2), color: COLORS.heading });
 
     // Small tick marking the robot's right side (so orientation is unambiguous).
     // const right = rightVec(sim.heading);
-    // const rp = add(sim.center, right, 5);
+    // const rp = add(sim.pivot, right, 5);
     // g.circle(rp.x, rp.y, this.px(2)).fill({ color: COLORS.heading });
   }
 }

@@ -11,7 +11,8 @@ import {
   vecToHeading,
 } from "./coords";
 import {
-  ROBOT_LENGTH_CM,
+  PIVOT_FROM_REAR_CM,
+  PIVOT_TO_FRONT_CM,
   ROBOT_WIDTH_CM,
   SENSOR_FORWARD_CM,
   SENSOR_RIGHT_CM,
@@ -83,25 +84,29 @@ export function pointInBox(p: Vec2, b: Box): boolean {
   return pointInConvexPoly(p, boxCorners(b));
 }
 
-/** The four world-space corners of the robot at a given pose. */
-export function robotCorners(center: Vec2, headingDeg: number): Vec2[] {
+/**
+ * The four world-space corners of the robot at a given pose. The body is
+ * asymmetric about the pose point: it reaches PIVOT_TO_FRONT_CM ahead and
+ * PIVOT_FROM_REAR_CM behind, because the pose we track is the turning pivot,
+ * not the centre of the rectangle.
+ */
+export function robotCorners(pivot: Vec2, headingDeg: number): Vec2[] {
   const fwd = headingToVec(headingDeg);
   const right = rightVec(headingDeg);
-  const hl = ROBOT_LENGTH_CM / 2;
   const hw = ROBOT_WIDTH_CM / 2;
   return [
-    add(add(center, fwd, hl), right, hw),
-    add(add(center, fwd, hl), right, -hw),
-    add(add(center, fwd, -hl), right, -hw),
-    add(add(center, fwd, -hl), right, hw),
+    add(add(pivot, fwd, PIVOT_TO_FRONT_CM), right, hw),
+    add(add(pivot, fwd, PIVOT_TO_FRONT_CM), right, -hw),
+    add(add(pivot, fwd, -PIVOT_FROM_REAR_CM), right, -hw),
+    add(add(pivot, fwd, -PIVOT_FROM_REAR_CM), right, hw),
   ];
 }
 
 /** World position of the IR sensor origin for a given pose. */
-export function sensorOrigin(center: Vec2, headingDeg: number): Vec2 {
+export function sensorOrigin(pivot: Vec2, headingDeg: number): Vec2 {
   const fwd = headingToVec(headingDeg);
   const right = rightVec(headingDeg);
-  return add(add(center, fwd, SENSOR_FORWARD_CM), right, SENSOR_RIGHT_CM);
+  return add(add(pivot, fwd, SENSOR_FORWARD_CM), right, SENSOR_RIGHT_CM);
 }
 
 // ---------------------------------------------------------------------------
@@ -141,11 +146,11 @@ export function polysOverlap(a: Vec2[], b: Vec2[]): boolean {
 }
 
 export function robotHitsAny(
-  center: Vec2,
+  pivot: Vec2,
   headingDeg: number,
   obstacles: Box[],
 ): boolean {
-  const rc = robotCorners(center, headingDeg);
+  const rc = robotCorners(pivot, headingDeg);
   for (const o of obstacles) {
     if (polysOverlap(rc, boxCorners(o))) return true;
   }

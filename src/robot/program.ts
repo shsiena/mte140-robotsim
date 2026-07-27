@@ -1,22 +1,8 @@
-// =============================================================================
-//  YOUR ROBOT ALGORITHM GOES HERE.
-//
-//  Edit this file, then hit "Run" in the app (Vite hot-reloads it and resets
-//  the sim). Everything is in centimetres / degrees so it ports to the VEX IQ
-//  with minimal changes. See src/robot/types.ts for the full Robot API.
-//
-//  Conventions:
-//    - World: origin bottom-left, +x right, +y up (cm).
-//    - Heading: 0° = north (+y), clockwise positive.
-//    - r.grid is your own boolean world-model, drawn live as a cell overlay.
-//
-//  The example below is a simple reactive obstacle-avoider — replace it with
-//  your algorithm.
-// =============================================================================
 
 import {
   CELL_CM,
-  ROBOT_LENGTH_CM,
+  PIVOT_FROM_REAR_CM,
+  PIVOT_TO_FRONT_CM,
   ROBOT_WIDTH_CM,
   SENSOR_HALF_CONE_DEG,
   SENSOR_FORWARD_CM,
@@ -25,73 +11,6 @@ import {
 } from "../config";
 import type { Robot } from "./types";
 
-// export async function run(r: Robot): Promise<void> {
-//   const goal = r.goal();
-//   const SAFE_CM = 12; // stop / steer when something is this close
-//
-//   while (true) {
-//     // Point roughly at the goal.
-//     const p = r.position();
-//     await r.turnTo(bearingTo(p, goal));
-//
-//     // Obstacle ahead? Note it in the world-model and steer around it.
-//     if (r.distance() < SAFE_CM) {
-//       markSensedCell(r);
-//       while (r.distance() < SAFE_CM) {
-//         await r.turn(15); // rotate right until the path clears
-//         markSensedCell(r);
-//       }
-//       await r.driveFor(6); // sidestep, then re-aim next loop
-//       continue;
-//     }
-//
-//     // Drive forward while watching the sensor; the sim ends the run on its own
-//     // when the robot's centre reaches the goal.
-//     r.setDrive(15);
-//     while (r.distance() >= SAFE_CM) {
-//       await r.step();
-//     }
-//     r.stop();
-//   }
-// }
-
-// ===========================================================================
-//  Approach B — occupancy mapping via an inverse sensor model.
-//
-//  Convention: grid cell `true` = potential obstacle / unknown,
-//              grid cell `false` = known clear.
-//
-//  Start with everything unknown, carve a known-clear bubble around the start,
-//  then rotate in place sweeping the IR sensor. For every measurement, any cell
-//  that is inside the cone AND nearer than the hit distance is provably empty,
-//  so mark it clear. Cells at/beyond the hit are never touched, so obstacle
-//  faces and the shadows behind them stay "unknown" — exactly the map a
-//  pathfinder should treat as blocked.
-//
-//  No ray fan: each cell is tested directly against the cone, so there are no
-//  divergence gaps at range.
-//
-//  Pathfinding on top (monotone N/E only). After each in-place sweep we derive
-//  three clearance grids from the occupancy map:
-//    - reachable / "turn" cells (orange): full-rotation clearance.
-//    - drive-up cells (blue): the robot fits facing north — safe to drive north.
-//    - drive-east cells (pink): the robot fits facing east — safe to drive east.
-//  (A turn cell fits at every heading, so turn ⊆ up ∩ east; the blue/pink cells
-//   that matter are the narrow gaps you can drive through but not rotate in.)
-//
-//  Then each round:
-//    1. Try to find a monotone north/east path to the goal that drives north
-//       only through up-cells, east only through east-cells, and makes every
-//       turn on a turn-cell — minimising the number of turns. If one exists,
-//       drive it straight to the goal, no further scanning.
-//    2. Otherwise take one exploration step: go north or east, whichever has the
-//       longer run of orange (turn) cells ahead — so we can spin to scan at the
-//       far end — up to the step cap or the edge of that zone. Sweep again into
-//       the SAME grid and repeat.
-//
-//  Deliberately simple: the explore rule is pure greedy (no dead-end lookahead),
-//  so it can still wall itself into a pocket. The point is to watch how it does.
-// ===========================================================================
 
 interface Vec2 {
   x: number;
@@ -101,19 +20,31 @@ interface Vec2 {
 const SWEEP_STEP_DEG = 1; // sensor sweep resolution
 const SWEEP_TOTAL_DEG = 360; // full spin at each waypoint before re-planning
 const CLEAR_MARGIN_CM = 1.5; // stop clearing just short of the hit surface
-const START_CLEAR_RADIUS_CM = 20; // guaranteed-clear bubble around the start
+// Guaranteed-clear bubble around the start. Must cover the footprint at every
+// heading (hypot(BEHIND, HALF_WID)) or the robot cannot pick an opening move.
+const START_CLEAR_RADIUS_CM = 24;
 
-// Inflated half-footprint (robot half-extents + a safety margin). Facing north
-// the length runs along y and the width along x; facing east it's swapped.
-const CLEARANCE_MARGIN_CM = 1;
-const HALF_LEN_CM = ROBOT_LENGTH_CM / 2 + CLEARANCE_MARGIN_CM; // 12
-const HALF_WID_CM = ROBOT_WIDTH_CM / 2 + CLEARANCE_MARGIN_CM; // 9
-// Circumscribed radius of that inflated footprint: the disc it sweeps when it
-// spins. A "turn" cell needs everything within this radius clear — which is why
-// a turn cell also fits at every fixed heading (turn ⊆ up ∩ east).
-const ROBOT_RADIUS_CM = Math.hypot(HALF_LEN_CM, HALF_WID_CM); // 15
+// Every clearance test compares the footprint against blocked CELL CENTRES, so
+// each extent carries two allowances beyond the body itself: half a cell
+// diagonal because solid material can sit that far past the nearest cell the
+// map calls blocked, and half a cell diagonal because the pivot can sit that
+// far from the centre of the cell it is in. Plus a plain safety buffer.
+const CELL_HALF_DIAGONAL_CM = (CELL_CM / 2) * Math.SQRT2; // 1.41
+const SAFETY_CM = 1;
+const FIT_MARGIN_CM = SAFETY_CM + 2 * CELL_HALF_DIAGONAL_CM; // 3.83
 
-const STEP_MAX_CM = 10; // furthest we commit to in one greedy step
+// Inflated footprint, measured from the PIVOT. The body is asymmetric about it
+// — two thirds of the length trails behind — so the rear overhang dominates
+// everything that follows.
+const AHEAD_CM = PIVOT_TO_FRONT_CM + FIT_MARGIN_CM; // 11.16
+const BEHIND_CM = PIVOT_FROM_REAR_CM + FIT_MARGIN_CM; // 18.50
+const HALF_WID_CM = ROBOT_WIDTH_CM / 2 + FIT_MARGIN_CM; // 11.83
+// Radius of the disc the body sweeps through a full spin about the pivot.
+// A "turn" cell needs everything inside this clear, so it also fits at every
+// fixed heading (turn ⊆ up ∩ east).
+const ROBOT_RADIUS_CM = Math.hypot(BEHIND_CM, HALF_WID_CM); // 21.96
+
+const STEP_MAX_CM = 10; // furthest one blind exploration step may commit to
 const MIN_STEP_CM = CELL_CM; // a step shorter than this isn't worth taking
 const MAX_STEPS = 500; // hard cap so a stuck run can't loop forever
 
@@ -138,7 +69,7 @@ export async function run(r: Robot): Promise<void> {
 
     // Choose the next move from a FULL multi-move path:
     //   1. the minimal-turn path to the goal, if one exists; else
-    //   2. the path to the reachable yellow cell closest to the goal (Euclidean)
+    //   2. the path to the orange turn cell closest to the goal (Euclidean)
     //      — reached over several valid moves, not just a single straight move.
     // Either way we drive only its first segment, then loop to re-scan/re-plan.
     let path = findPath(r);
@@ -146,7 +77,7 @@ export async function run(r: Robot): Promise<void> {
       r.log("path to goal — advancing to next waypoint");
     } else {
       path = findGreedyPath(r);
-      if (path) r.log("no goal path — advancing toward closest reachable yellow cell");
+      if (path) r.log("no goal path — advancing toward closest reachable turn cell");
     }
 
     if (path) {
@@ -154,7 +85,7 @@ export async function run(r: Robot): Promise<void> {
       continue;
     }
 
-    // Last resort only: no reachable yellow cell is closer to the goal than we
+    // Last resort only: no reachable turn cell is closer to the goal than we
     // already are, so there's nothing to plan toward until we reveal more map.
     // Take one step along the longer orange run to get a fresh vantage/scan.
     const northRun = reachableRun(r, p, 0, 1, Math.max(0, goal.y - p.y));
@@ -283,10 +214,12 @@ function findPath(r: Robot): Cell[] | null {
 }
 
 /**
- * Greedy-travel variant. Among turn (orange) cells reachable by a valid path,
- * return a path to the one whose centre is closest to the goal — but only if it
- * is strictly closer to the goal than the robot's own cell already is. Returns
- * null otherwise, so the caller falls back to an exploration step.
+ * Fallback for when no N/E path reaches the goal. Among turn (orange) cells
+ * reachable by a valid path, return a path to the one whose centre is closest
+ * to the goal — but only if it is strictly closer to the goal than the robot's
+ * own cell already is. That guard is what stops the robot oscillating: without
+ * it the "closest" cell can be one we just came from. Returns null otherwise,
+ * so the caller falls back to a blind exploration step.
  */
 function findGreedyPath(r: Robot): Cell[] | null {
   const s = r.cell();
@@ -466,11 +399,13 @@ function computeCells(r: Robot): void {
     for (let cx = 0; cx < r.grid.cols; cx++) {
       if (r.grid.get(cx, cy)) continue; // the cell itself must be known-clear
       if (rotationClear(r, cx, cy, rCells, r2)) r.reachable.set(cx, cy, true);
-      if (footprintClear(r, cx, cy, HALF_WID_CM, HALF_LEN_CM)) {
-        r.driveUp.set(cx, cy, true); // facing north
+      // The body trails behind the pivot, so "facing north" reaches BEHIND_CM
+      // down and only AHEAD_CM up; facing east swaps the axes.
+      if (boxClear(r, cx, cy, -HALF_WID_CM, HALF_WID_CM, -BEHIND_CM, AHEAD_CM)) {
+        r.driveUp.set(cx, cy, true);
       }
-      if (footprintClear(r, cx, cy, HALF_LEN_CM, HALF_WID_CM)) {
-        r.driveEast.set(cx, cy, true); // facing east
+      if (boxClear(r, cx, cy, -BEHIND_CM, AHEAD_CM, -HALF_WID_CM, HALF_WID_CM)) {
+        r.driveEast.set(cx, cy, true);
       }
     }
   }
@@ -500,27 +435,32 @@ function rotationClear(
 }
 
 /**
- * True if the robot's axis-aligned footprint of half-extents (halfX, halfY) cm,
- * centred on (cx, cy), overlaps no known-blocked cell.
+ * True if the axis-aligned box spanning [minX, maxX] x [minY, maxY] cm about
+ * the pivot at cell (cx, cy) overlaps no known-blocked cell. The extents are
+ * signed because the robot's body is not centred on its pivot.
  */
-function footprintClear(
+function boxClear(
   r: Robot,
   cx: number,
   cy: number,
-  halfX: number,
-  halfY: number,
+  minX: number,
+  maxX: number,
+  minY: number,
+  maxY: number,
 ): boolean {
-  const hxCells = Math.ceil(halfX / CELL_CM);
-  const hyCells = Math.ceil(halfY / CELL_CM);
-  for (let dy = -hyCells; dy <= hyCells; dy++) {
-    for (let dx = -hxCells; dx <= hxCells; dx++) {
+  const loX = Math.floor(minX / CELL_CM);
+  const hiX = Math.ceil(maxX / CELL_CM);
+  const loY = Math.floor(minY / CELL_CM);
+  const hiY = Math.ceil(maxY / CELL_CM);
+  for (let dy = loY; dy <= hiY; dy++) {
+    for (let dx = loX; dx <= hiX; dx++) {
       const nx = cx + dx;
       const ny = cy + dy;
       if (nx < 0 || ny < 0 || nx >= r.grid.cols || ny >= r.grid.rows) continue;
       if (!r.grid.get(nx, ny)) continue; // clear neighbour — fine
-      if (Math.abs(dx * CELL_CM) <= halfX && Math.abs(dy * CELL_CM) <= halfY) {
-        return false;
-      }
+      const wx = dx * CELL_CM;
+      const wy = dy * CELL_CM;
+      if (wx >= minX && wx <= maxX && wy >= minY && wy <= maxY) return false;
     }
   }
   return true;

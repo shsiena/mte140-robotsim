@@ -44,7 +44,7 @@ type ActiveMove =
 const EPS = 1e-6;
 
 export class Simulation {
-  center: Vec2 = { x: 0, y: 0 };
+  pivot: Vec2 = { x: 0, y: 0 };
   heading = 0;
   status: SimStatus = "idle";
   statusReason = "";
@@ -73,12 +73,12 @@ export class Simulation {
   }
 
   private applyStartPose(): void {
-    this.center = { x: this.world.start.x, y: this.world.start.y };
+    this.pivot = { x: this.world.start.x, y: this.world.start.y };
     this.heading = normalizeDeg(this.world.start.heading);
     this.linVel = 0;
     this.angVel = 0;
     this.activeMove = null;
-    this.trail = [{ ...this.center }];
+    this.trail = [{ ...this.pivot }];
     this.lastSensor = this.measure();
   }
 
@@ -157,9 +157,9 @@ export class Simulation {
     this.integrate(dt);
     if (this.status !== "running") return;
 
-    // Goal capture: robot centre within the goal radius.
+    // Goal capture: robot pivot within the goal radius.
     const g = this.world.goal;
-    if (dist(this.center, { x: g.x, y: g.y }) <= g.radius) {
+    if (dist(this.pivot, { x: g.x, y: g.y }) <= g.radius) {
       this.succeed();
       return;
     }
@@ -222,13 +222,13 @@ export class Simulation {
     const stepF = dForward / n;
 
     for (let i = 0; i < n; i++) {
-      const prevCenter = { ...this.center };
+      const prevPivot = { ...this.pivot };
       const prevHeading = this.heading;
       this.heading = normalizeDeg(this.heading + stepH);
-      this.center = add(this.center, headingToVec(this.heading), stepF);
-      if (robotHitsAny(this.center, this.heading, this.world.obstacles)) {
+      this.pivot = add(this.pivot, headingToVec(this.heading), stepF);
+      if (robotHitsAny(this.pivot, this.heading, this.world.obstacles)) {
         // Revert the offending sub-step and fail.
-        this.center = prevCenter;
+        this.pivot = prevPivot;
         this.heading = prevHeading;
         this.fail("collision with obstacle");
         return;
@@ -255,13 +255,13 @@ export class Simulation {
 
   private pushTrail(): void {
     const last = this.trail[this.trail.length - 1];
-    if (!last || dist(last, this.center) >= 0.5) {
-      this.trail.push({ ...this.center });
+    if (!last || dist(last, this.pivot) >= 0.5) {
+      this.trail.push({ ...this.pivot });
     }
   }
 
   private measure(): number {
-    const origin = sensorOrigin(this.center, this.heading);
+    const origin = sensorOrigin(this.pivot, this.heading);
     return measureCone(origin, this.heading, this.world.obstacles);
   }
 
@@ -363,10 +363,10 @@ class RobotApi implements Robot {
   ) {}
 
   position(): { x: number; y: number } {
-    return { x: this.sim.center.x, y: this.sim.center.y };
+    return { x: this.sim.pivot.x, y: this.sim.pivot.y };
   }
   cell(): { cx: number; cy: number } {
-    return worldToCell(this.sim.center.x, this.sim.center.y);
+    return worldToCell(this.sim.pivot.x, this.sim.pivot.y);
   }
   heading(): number {
     return this.sim.heading;
@@ -423,10 +423,6 @@ class RobotApi implements Robot {
 
   get driveEast(): BoolGrid {
     return this.sim.world.driveEast;
-  }
-
-  get greedyTravel(): boolean {
-    return this.sim.world.greedyTravel;
   }
 
   log(...args: unknown[]): void {

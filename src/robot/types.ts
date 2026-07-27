@@ -16,9 +16,10 @@ export interface BoolGrid {
 
 export interface Robot {
   // --- sensing (instant, synchronous) --------------------------------------
-  /** Robot centre in world cm (origin bottom-left, +x right, +y up). */
+  /** Robot pivot point in world cm — the point it rotates about, two thirds of
+   *  the way forward. Origin bottom-left, +x right, +y up. */
   position(): { x: number; y: number };
-  /** Current grid cell of the robot centre. cy=0 is the bottom row. */
+  /** Current grid cell of the robot pivot. cy=0 is the bottom row. */
   cell(): { cx: number; cy: number };
   /** Heading in degrees: 0=north(+y), clockwise positive. */
   heading(): number;
@@ -63,10 +64,6 @@ export interface Robot {
   readonly driveUp: BoolGrid;
   /** Extra overlay (pink): cells the robot fits in facing east (drive-east). */
   readonly driveEast: BoolGrid;
-
-  // --- run options (from the UI) -------------------------------------------
-  /** "Greedy travel" toggle: hop to the closest reachable turn cell to goal. */
-  readonly greedyTravel: boolean;
 
   /** Print to the telemetry log / console for debugging. */
   log(...args: unknown[]): void;

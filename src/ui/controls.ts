@@ -66,13 +66,15 @@ export class EditorUI {
         </label>
         <span id="speedVal">1.0×</span>
       </div>
-      <div class="row">
-        <label><input id="greedy" type="checkbox" /> Greedy travel</label>
-      </div>
 
       <h2>Status</h2>
       <div class="row"><span id="status" class="status idle">idle</span></div>
       <div class="telemetry" id="telemetry"></div>
+
+      <h2>Display</h2>
+      <div class="row">
+        <label><input id="showObstacles" type="checkbox" /> Obstacles</label>
+      </div>
 
       <h2>Environment</h2>
       <div class="row">
@@ -125,10 +127,10 @@ export class EditorUI {
       this.$("#speedVal").textContent = `${this.simSpeed.toFixed(1)}×`;
     };
 
-    const greedy = this.$("#greedy") as HTMLInputElement;
-    greedy.checked = w.greedyTravel;
-    greedy.onchange = () => {
-      w.greedyTravel = greedy.checked;
+    const showObstacles = this.$("#showObstacles") as HTMLInputElement;
+    showObstacles.checked = w.showObstacles;
+    showObstacles.onchange = () => {
+      w.showObstacles = showObstacles.checked;
     };
 
     this.$("#applySize").onclick = () => this.applySize();
@@ -302,10 +304,10 @@ export class EditorUI {
 
   refresh(): void {
     const s = this.sim;
-    const c = worldToCell(s.center.x, s.center.y);
+    const c = worldToCell(s.pivot.x, s.pivot.y);
     const d = s.lastSensor;
     this.$("#telemetry").innerHTML =
-      `<div><span>pos</span><span>(${s.center.x.toFixed(1)}, ${s.center.y.toFixed(1)}) cm</span></div>` +
+      `<div><span>pos</span><span>(${s.pivot.x.toFixed(1)}, ${s.pivot.y.toFixed(1)}) cm</span></div>` +
       `<div><span>cell</span><span>(${c.cx}, ${c.cy})</span></div>` +
       `<div><span>heading</span><span>${s.heading.toFixed(1)}°</span></div>` +
       `<div><span>IR</span><span>${Number.isFinite(d) ? d.toFixed(1) + " cm" : "∞"}</span></div>`;

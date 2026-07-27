@@ -8,13 +8,20 @@ export const CELL_CM = 2; // each grid cell is 2cm x 2cm
 export const ROBOT_LENGTH_CM = 22;
 export const ROBOT_WIDTH_CM = 16;
 
-// IR sensor mounting, expressed in the robot's local frame:
-//   forward  = +cm along the heading   (front edge is +LENGTH/2)
+// The robot turns in place about a point two thirds of the way forward, NOT
+// about the centre of its body. That point is the pose the whole simulation
+// tracks, so rotation leaves it fixed and the body swings around it. The rear
+// overhang is what sets the turning circle: hypot(14.67, 8) = 16.71cm, versus
+// the 13.60cm a body-centred model would predict.
+export const PIVOT_FROM_REAR_CM = (ROBOT_LENGTH_CM * 2) / 3; // 14.67
+export const PIVOT_TO_FRONT_CM = ROBOT_LENGTH_CM - PIVOT_FROM_REAR_CM; // 7.33
+export const TURN_RADIUS_CM = Math.hypot(PIVOT_FROM_REAR_CM, ROBOT_WIDTH_CM / 2);
+
+// IR sensor mounting, in the robot's local frame relative to the PIVOT:
+//   forward  = +cm along the heading (the front edge sits at +PIVOT_TO_FRONT)
 //   right    = +cm to the robot's right
-// Sensor sits on the front edge, 3/4 of the way across the width from the left,
-// i.e. 0.25 * width to the right of centre.
-export const SENSOR_FORWARD_CM = ROBOT_LENGTH_CM / 2; // 11
-export const SENSOR_RIGHT_CM = 0 * ROBOT_WIDTH_CM; // 4
+export const SENSOR_FORWARD_CM = PIVOT_TO_FRONT_CM; // 7.33
+export const SENSOR_RIGHT_CM = 0 * ROBOT_WIDTH_CM;
 
 // IR detection cone: 24.19 deg total, so +/- 12.095 deg about the centreline.
 export const SENSOR_CONE_DEG = 24.19;
@@ -22,7 +29,7 @@ export const SENSOR_HALF_CONE_DEG = SENSOR_CONE_DEG / 2;
 
 // Valid measurement window. Beyond max (or nothing in the cone) reads Infinity.
 export const SENSOR_MIN_CM = 1;
-export const SENSOR_MAX_CM = 120;
+export const SENSOR_MAX_CM = 304;
 
 // Default animation speeds. These are purely cosmetic: the simulation is
 // deterministic and the outcome does not depend on them. The sim-speed slider
