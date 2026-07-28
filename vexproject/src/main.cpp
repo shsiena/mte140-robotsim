@@ -25,6 +25,8 @@ vex::brain       Brain;
 #include "config.h"
 #include "masks.h"
 #include "robot.h"
+#include "screen.h"
+#include "vexrobot.h"
 
 
 // --- linked list ---
@@ -448,12 +450,133 @@ void clearStartZone(IRobot& r) {
   }
 }
 
+// --- map view ---------------------------------------------------------------
+
+// The internal maps drawn live on the brain screen, one pixel per sub-cell,
+// with the robot and the goal overlaid so the pose can be read against what
+// the robot believes about the board.
+//
+// Rows are painted as runs of equal cells rather than pixel by pixel. The maps
+// are mostly large uniform regions, a swept-clear cone against unknown space,
+// so a row usually costs a handful of line draws instead of 120 pixel draws.
+
+enum MapId {
+  MAP_OCCUPANCY = 0,
+  MAP_REACHABLE,
+  MAP_TURN90,
+  MAP_DRIVE_UP,
+  MAP_DRIVE_EAST,
+  MAP_COUNT
+};
+
+// Short enough for the strip beside the map.
+const char* const MAP_LABELS[MAP_COUNT] = {"occ", "rch", "t90", "dUp", "dEa"};
+
+MapId shownMap = MAP_OCCUPANCY;
+uint32_t lastMapDrawMs = 0;
+
+const Map& mapById(MapId id) {
+  switch (id) {
+    case MAP_REACHABLE: return reachable;
+    case MAP_TURN90: return turn90;
+    case MAP_DRIVE_UP: return driveUp;
+    case MAP_DRIVE_EAST: return driveEast;
+    default: return occupancy;
+  }
+}
+
+// The brain's two navigation buttons cycle through the maps. Edge triggered,
+// since this is polled far faster than a button can be released.
+void serviceMapButtons() {
+  static bool upWasPressed = false;
+  static bool downWasPressed = false;
+
+  const bool up = Brain.buttonUp.pressing();
+  const bool down = Brain.buttonDown.pressing();
+  if (up && !upWasPressed) {
+    shownMap = static_cast<MapId>((shownMap + 1) % MAP_COUNT);
+  }
+  if (down && !downWasPressed) {
+    shownMap = static_cast<MapId>((shownMap + MAP_COUNT - 1) % MAP_COUNT);
+  }
+  upWasPressed = up;
+  downWasPressed = down;
+}
+
+// Screen y grows downwards and the map's cy grows upwards.
+int screenYOf(int cy) { return screen::MAP_Y + (ROWS - 1 - cy); }
+
+void drawMapRows(const Map& map, const vex::color& setColor) {
+  Brain.Screen.setPenWidth(1);
+  for (int cy = 0; cy < ROWS; cy++) {
+    const int y = screenYOf(cy);
+    int runStart = 0;
+    bool runValue = map.get(0, cy);
+    // One past the last column, so the final run is always flushed.
+    for (int cx = 1; cx <= COLS; cx++) {
+      const bool value = cx < COLS ? map.get(cx, cy) : !runValue;
+      if (value == runValue) continue;
+      Brain.Screen.setPenColor(runValue ? setColor : vex::color::black);
+      Brain.Screen.drawLine(screen::MAP_X + runStart, y, screen::MAP_X + cx - 1,
+                            y);
+      runStart = cx;
+      runValue = value;
+    }
+  }
+}
+
+void drawMapOverlays(IRobot& r) {
+  Brain.Screen.setFillColor(vex::color::transparent);
+
+  const Goal goal = r.goal();
+  const Cell goalCell = cellAt(goal.x, goal.y);
+  Brain.Screen.setPenColor(vex::color::yellow);
+  Brain.Screen.drawCircle(screen::MAP_X + goalCell.cx, screenYOf(goalCell.cy),
+                          static_cast<int>(goal.radius / SUBCELL_CM));
+
+  // The pivot, plus a stub in the direction the robot is facing.
+  const Vec2 p = r.position();
+  const Cell here = cellAt(p.x, p.y);
+  const int x = screen::MAP_X + here.cx;
+  const int y = screenYOf(here.cy);
+  const float radians = r.heading() * DEG_TO_RAD;
+  const int noseLength = 6;
+
+  Brain.Screen.setPenColor(vex::color::red);
+  Brain.Screen.drawCircle(x, y, 2);
+  Brain.Screen.drawLine(
+      x, y, x + static_cast<int>(sinf(radians) * noseLength),
+      y - static_cast<int>(cosf(radians) * noseLength));
+}
+
+// Repaints the map, throttled. Safe to call as often as is convenient.
+void drawMapView(IRobot& r) {
+  const uint32_t now = vex::timer::system();
+  if (now - lastMapDrawMs < screen::MAP_REFRESH_MS) return;
+  lastMapDrawMs = now;
+
+  serviceMapButtons();
+
+  // A set bit means blocked or unknown in the occupancy map, but means the
+  // pose fits in the clearance maps, so the two are coloured differently to
+  // keep "white is something to avoid" from reading backwards.
+  const vex::color& setColor = shownMap == MAP_OCCUPANCY ? vex::color::white
+                                                         : vex::color::green;
+  drawMapRows(mapById(shownMap), setColor);
+  drawMapOverlays(r);
+
+  Brain.Screen.setPenColor(vex::color::white);
+  Brain.Screen.printAt(screen::SIDE_X, screen::SIDE_NAME_Y, true, "%s",
+                       MAP_LABELS[shownMap]);
+}
+
 // --- driving ----------------------------------------------------------------
 
 void whileMoving(IRobot& r) {
   while (r.isMoving() && !r.finished()) {
     r.step();
     markFree(r);
+    drawMapView(r);
   }
 }
 
@@ -478,12 +601,24 @@ bool headingIs(float headingDeg, float targetDeg) {
   return diff <= HEADING_EPS_DEG;
 }
 
+// The largest arc that can be commanded as a single turn. A turn is commanded
+// as an absolute heading, so "here plus a full circle" would be a command to
+// stay where it is; anything up to half a circle is unambiguous.
+const float SWEEP_LEG_DEG = 90.0f;
+
 // scan an arbitrary number of degrees
+//
+// One continuous rotation, sampled as it goes, rather than a rotation to each
+// heading in turn: the robot is never asked to stop, so the arc costs one
+// spin-up instead of hundreds, and whileMoving() reads the sensor throughout.
+// Long arcs are split into legs only because of the half-circle limit above,
+// and every leg runs the same way round so the robot never doubles back.
 void sweep(IRobot& r, float arcDeg) {
-  for (float turned = 0.0f; turned < arcDeg; turned += SWEEP_STEP_DEG) {
+  for (float turned = 0.0f; turned < arcDeg - EPS; turned += SWEEP_LEG_DEG) {
     if (r.finished()) return;
-    r.turn(SWEEP_STEP_DEG);
-    markFree(r);
+    const float legDeg = fminf(SWEEP_LEG_DEG, arcDeg - turned);
+    r.startTurnTo(r.heading() + legDeg);
+    whileMoving(r);
   }
 }
 
@@ -539,6 +674,10 @@ void run(IRobot& r) {
     scan(r);
     if (r.finished()) return;
     computeClearance();
+    // The clearance maps only change here, so this is the one point where
+    // showing one of them is worth forcing a repaint for.
+    lastMapDrawMs = 0;
+    drawMapView(r);
     if (withinGoal(r.goal(), r.position())) {
       r.log("goal reached");
       return;
@@ -557,14 +696,51 @@ void run(IRobot& r) {
 }
 
 
+// --- run setup ---------------------------------------------------------------
+
+// Where the robot is placed on the board and where it is being sent. The
+// algorithm has no way to discover either, so both are measured off the board
+// beforehand. World cm, origin bottom-left, heading 0 = north.
+//
+// The route search only ever moves up and to the right, so the goal has to sit
+// up and to the right of the start.
+namespace {
+
+const float START_X_CM = 10.0f;       // TODO: measure
+const float START_Y_CM = 10.0f;       // TODO: measure
+const float START_HEADING_DEG = 0.0f; // TODO: measure
+
+const float GOAL_X_CM = 70.0f;        // TODO: measure
+const float GOAL_Y_CM = 50.0f;        // TODO: measure
+const float GOAL_RADIUS_CM = 5.0f;    // TODO: measure
+
+}  // namespace
+
 int main() {
-	
+
     Brain.Screen.printAt( 2, 30, "Hello IQ2" );
 
-    // IRobot r = new IRobot()
-   
+    Vec2 start;
+    start.x = START_X_CM;
+    start.y = START_Y_CM;
+
+    Goal goal;
+    goal.x = GOAL_X_CM;
+    goal.y = GOAL_Y_CM;
+    goal.radius = GOAL_RADIUS_CM;
+
+    VexRobot robot(start, START_HEADING_DEG, goal);
+
+    // Calibrates the inertial sensor, so the robot has to be still and on the
+    // board by this point.
+    robot.begin();
+
+    robot.log("running");
+    run(robot);
+    robot.log("run over");
+
     while(1) {
-        
+
         // Allow other tasks to run
         this_thread::sleep_for(10);
     }
