@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "grid": {
+    "cols": 40,
+    "rows": 30,
+    "cellCm": 2,
+    "resolutionPerCell": 3
+  },
+  "start": {
+    "x": 1.667,
+    "y": 3.667,
+    "heading": 0
+  },
+  "goal": {
+    "x": 74,
+    "y": 54,
+    "radius": 4
+  },
+  "obstacles": [
+    {
+      "cx": 21.018,
+      "cy": 45.515,
+      "w": 3.38,
+      "h": 3.554,
+      "angle": 0
+    },
+    {
+      "cx": 26.869,
+      "cy": 45.558,
+      "w": 3.814,
+      "h": 3.467,
+      "angle": 0
+    },
+    {
+      "cx": 27.476,
+      "cy": 3.998,
+      "w": 3.467,
+      "h": 5.114,
+      "angle": 0
+    },
+    {
+      "cx": 66.219,
+      "cy": 20.119,
+      "w": 5.027,
+      "h": 7.367,
+      "angle": 0
+    }
+  ],
+  "robot": {
+    "lengthCm": 22,
+    "widthCm": 16,
+    "pivotFromRearCm": 14.667
+  },
+  "sensor": {
+    "forwardCm": 7.333,
+    "coneDeg": 24.19,
+    "minCm": 1,
+    "maxCm": 304
+  }
+}
