@@ -54,7 +54,7 @@ const TURN_RADIUS_CM = Math.hypot(BEHIND_CM, HALF_WIDTH_CM);
 
 const SWEEP_STEP_DEG = 1;
 const CLEAR_MARGIN_CM = 1.5;
-const START_CLEAR_RADIUS_CM = TURN_RADIUS_CM + CELL_CM;
+export const START_CLEAR_RADIUS_CM = TURN_RADIUS_CM + CELL_CM;
 const MIN_STEP_CM = CELL_CM;
 const MIN_MOTION_CM = 0.01;
 const MAX_STEPS = 500;
@@ -65,12 +65,13 @@ const MAX_STEPS = 500;
 const TRACE_STEP_DEG = ((SUBCELL_CM / (4 * TURN_RADIUS_CM)) * 180) / Math.PI;
 
 // Sub-cell offsets the body covers while turning between two headings. Fixed
-// geometry, so these are traced once here rather than per cell per frame; the
-// TODO: bake these tables into flash as const tables in the C++ port
-const FACING_NORTH = sweptOffsets(NORTH_DEG, NORTH_DEG);
-const FACING_EAST = sweptOffsets(EAST_DEG, EAST_DEG);
-const QUARTER_TURN = sweptOffsets(NORTH_DEG, EAST_DEG);
-const FULL_TURN = sweptOffsets(0, FULL_TURN_DEG);
+// geometry, so they are traced once at load rather than per cell per frame.
+// cpp/tools/gen_tables.ts reads these to emit the firmware's mask tables, so
+// the robot tests the same sets of sub-cells the simulator does.
+export const FACING_NORTH = sweptOffsets(NORTH_DEG, NORTH_DEG);
+export const FACING_EAST = sweptOffsets(EAST_DEG, EAST_DEG);
+export const QUARTER_TURN = sweptOffsets(NORTH_DEG, EAST_DEG);
+export const FULL_TURN = sweptOffsets(0, FULL_TURN_DEG);
 
 export async function run(r: Robot): Promise<void> {
   r.grid.fill(true);
