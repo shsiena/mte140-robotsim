@@ -41,8 +41,9 @@ public:
 
         float prevX = numNodes->xPos;
         float prevY = numNodes->yPos;
-        newNode->xPos = xPos + x;
-        newNode->yPos = yPos + y;
+        newNode->xPos = prevX + x;
+        newNode->yPos = prevY + y;
+        newNode->heading = InertialBrain.heading();
         numNodes++;
     }
 };
