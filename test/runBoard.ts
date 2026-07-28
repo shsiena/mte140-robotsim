@@ -3,6 +3,7 @@
 
 import { CELL_CM, GRID_RESOLUTION_PER_CELL } from "../src/config";
 import { run } from "../src/robot/program";
+import type { RobotProgram } from "../src/robot/types";
 import { Simulation } from "../src/sim/Simulation";
 import { World } from "../src/sim/World";
 
@@ -42,7 +43,10 @@ function assertSnapshotMatchesConfig(board: BoardSnapshot): void {
   }
 }
 
-export async function runBoard(board: BoardSnapshot): Promise<BoardResult> {
+export async function runBoard(
+  board: BoardSnapshot,
+  program: RobotProgram = run,
+): Promise<BoardResult> {
   assertSnapshotMatchesConfig(board);
 
   const world = new World(board.grid.cols, board.grid.rows);
@@ -53,7 +57,7 @@ export async function runBoard(board: BoardSnapshot): Promise<BoardResult> {
   const sim = new Simulation(world);
   const log: string[] = [];
   sim.onLog = (line) => log.push(line);
-  sim.run(run);
+  sim.run(program);
 
   let travelledCm = 0;
   let previous = { ...sim.pivot };
