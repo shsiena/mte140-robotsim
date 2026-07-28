@@ -86,15 +86,12 @@ export async function run(r: Robot): Promise<void> {
     }
 
     const route = planRoute(r);
-    if (route) {
-      r.log(route.reachesGoal ? "route to goal" : "route to closer vantage");
-      await driveRoute(r, route.cells);
-      continue;
-    }
-    if (!(await exploreOutward(r))) {
-      r.log("stuck: no drivable north or east run");
+    if (!route) {
+      r.log("stuck: no route to the goal or to a new vantage");
       return;
     }
+    r.log(route.reachesGoal ? "route to goal" : "route to vantage");
+    await driveRoute(r, route.cells);
   }
   r.log("step budget exhausted");
 }
@@ -111,7 +108,7 @@ function isClear(r: Robot, cx: number, cy: number, mask: Int16Array): boolean {
 /**
  * A quarter turn passes through both fixed headings and a full turn contains a
  * quarter one, so the masks nest and each grid implies the ones below it. That
- * lets the cheaper test short-circuit the dearer one.
+ * lets the cheaper test short-circuit the more expensive one.
  */
 function computeClearance(r: Robot): void {
   for (let cy = 0; cy < r.grid.rows; cy++) {
@@ -180,11 +177,11 @@ function bodyCoversCell(dx: number, dy: number, sin: number, cos: number): boole
   return Math.abs(offY) <= bodySpanY + HALF_SUBCELL_CM;
 }
 
-// --- route planning -------------------------------------------------------
+// --- ROUTE PLANNING ---
 
 type Arrival = "east" | "north";
 
-/** Turns needed to reach each cell of the search box, per arrival heading. */
+// Turns needed to reach each cell of the search box, per arrival heading.
 interface TurnCosts {
   east: number[][];
   north: number[][];
@@ -216,12 +213,6 @@ function cellAt(r: Robot, x: number, y: number): Cell {
     cx: Math.max(0, Math.min(r.grid.cols - 1, Math.floor(x / SUBCELL_CM))),
     cy: Math.max(0, Math.min(r.grid.rows - 1, Math.floor(y / SUBCELL_CM))),
   };
-}
-
-// How far past the goal's row or column a straight run can be while still hitting the goal
-function goalOvershootCm(radius: number, offAxisCm: number): number {
-  const remaining = radius * radius - offAxisCm * offAxisCm;
-  return remaining > 0 ? Math.sqrt(remaining) : 0;
 }
 
 function minTurnCosts(r: Robot, start: Cell, width: number, height: number): TurnCosts {
@@ -258,7 +249,7 @@ function minTurnCosts(r: Robot, start: Cell, width: number, height: number): Tur
   return { east, north };
 }
 
-/** Walk the costs back to the start, recovering each step's arrival heading. */
+// Walk the costs back to the start, recovering each step's arrival heading.
 function backtrack(costs: TurnCosts, start: Cell, target: Candidate): Cell[] {
   const cells: Cell[] = [];
   let i = target.i;
@@ -278,30 +269,25 @@ function backtrack(costs: TurnCosts, start: Cell, target: Candidate): Cell[] {
   return cells.reverse();
 }
 
-/**
- * Search the box between the robot and the far edge of the goal disc, and
- * return the fewest-turn route into the goal. Failing that, return a route to
- * the nearest vantage point the robot can sweep from, which reveals more map
- * for the next attempt.
- */
+
+// Search the box between the robot and the far edge of the goal zone,
+// return the fewest-turn route into the goal. Failing that, return a route to
+// the nearest vantage point the robot can sweep from
 function planRoute(r: Robot): Route | null {
   const start = r.cell();
   if (!r.turn90.get(start.cx, start.cy)) return null;
 
   const goal = r.goal();
   const goalCentre = cellAt(r, goal.x, goal.y);
-  // Reaching past the goal's own row and column matters: rounding an obstacle
-  // often needs that room, any cell inside the disc finishes the run just as
-  // well, and monotone travel gets no second chance at it.
   const pad = Math.ceil(goal.radius / SUBCELL_CM);
   const width = Math.min(r.grid.cols - 1, goalCentre.cx + pad) - start.cx;
   const height = Math.min(r.grid.rows - 1, goalCentre.cy + pad) - start.cy;
   if (width < 0 || height < 0) return null;
 
   const costs = minTurnCosts(r, start, width, height);
+  const here = r.position();
   const distanceTo = (cx: number, cy: number) =>
-  Math.hypot(goal.x - centreOf(cx), goal.y - centreOf(cy));
-  const startDistance = distanceTo(start.cx, start.cy);
+    Math.hypot(goal.x - centreOf(cx), goal.y - centreOf(cy));
 
   let bestGoal: Candidate | null = null;
   let bestVantage: Candidate | null = null;
@@ -325,13 +311,10 @@ function planRoute(r: Robot): Route | null {
         continue;
       }
 
-      // Stopping past the goal strands the robot, and a vantage is only useful
-      // if it can sweep and if it actually closes the gap — otherwise the robot
-      // oscillates between two cells that each look closer from the other.
-      
       if (cx > goalCentre.cx || cy > goalCentre.cy) continue;
       if (!r.turn90.get(cx, cy)) continue;
-      if (candidate.distanceCm >= startDistance - EPS) continue;
+      const stepCm = Math.hypot(centreOf(cx) - here.x, centreOf(cy) - here.y);
+      if (stepCm < MIN_STEP_CM) continue;
       if (
         !bestVantage ||
         candidate.distanceCm < bestVantage.distanceCm - EPS ||
@@ -380,53 +363,6 @@ async function driveRoute(r: Robot, cells: Cell[]): Promise<void> {
     }
     if (r.reachable.get(to.cx, to.cy)) return;
   }
-}
-
-// Take the longer of the two axis runs purely to gain a fresh vantage point
-async function exploreOutward(r: Robot): Promise<boolean> {
-  const from = r.position();
-  const goal = r.goal();
-  const northLimit =
-    goal.y + goalOvershootCm(goal.radius, from.x - goal.x) - from.y;
-  const eastLimit =
-    goal.x + goalOvershootCm(goal.radius, from.y - goal.y) - from.x;
-  const north = drivableRun(r, from, 0, 1, Math.max(0, northLimit));
-  const east = drivableRun(r, from, 1, 0, Math.max(0, eastLimit));
-
-  if (north < MIN_STEP_CM && east < MIN_STEP_CM) return false;
-  if (north >= east) {
-    await turnScanning(r, NORTH_DEG);
-    await driveScanning(r, north);
-  } else {
-    await turnScanning(r, EAST_DEG);
-    await driveScanning(r, east);
-  }
-  return true;
-}
-
-/**
- * Furthest distance along an axis that the body fits the whole way to and can
- * sweep from on arrival. The corridor itself needs only the drive clearance;
- * demanding sweep clearance along its whole length strands the robot beside any
- * obstacle sitting just inside TURN_RADIUS_CM.
- */
-function drivableRun(
-  r: Robot,
-  origin: Vec2,
-  dirX: number,
-  dirY: number,
-  maxCm: number,
-): number {
-  const fits = dirY !== 0 ? r.driveUp : r.driveEast;
-  let furthest = 0;
-  for (let d = 0; d <= maxCm + EPS; d += HALF_SUBCELL_CM) {
-    const cx = Math.floor((origin.x + dirX * d) / SUBCELL_CM);
-    const cy = Math.floor((origin.y + dirY * d) / SUBCELL_CM);
-    if (cx < 0 || cy < 0 || cx >= r.grid.cols || cy >= r.grid.rows) break;
-    if (!fits.get(cx, cy)) break;
-    if (r.turn90.get(cx, cy)) furthest = d;
-  }
-  return furthest;
 }
 
 async function whileMoving(r: Robot, motion: Promise<void>): Promise<void> {
