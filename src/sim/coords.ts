@@ -3,14 +3,15 @@
 //   World: origin at bottom-left, +x right, +y up, units = cm.
 //   Heading: 0 deg = north (+y / up), CLOCKWISE positive.
 //            90 = east (+x), 180 = south (-y), 270 = west (-x).
-//   Cells:  cx = floor(x / CELL_CM), cy = floor(y / CELL_CM).
+//   Cells:  the board is drawn in CELL_CM cells, but every map index is a
+//           SUBCELL_CM sub-cell: cx = floor(x / SUBCELL_CM), likewise cy.
 //           cx increases left->right, cy increases bottom->top.
 //
 // Because heading 0 points at +y and grows clockwise, the forward unit vector
 // is (sin h, cos h): h=0 -> (0,1) up, h=90 -> (1,0) right. The robot's "right"
 // is that vector rotated -90 clockwise: (cos h, -sin h).
 
-import { CELL_CM } from "../config";
+import { SUBCELL_CM } from "../config";
 
 export interface Vec2 {
   x: number;
@@ -50,12 +51,22 @@ export function angleDiff(a: number, b: number): number {
   return d;
 }
 
-export function worldToCell(x: number, y: number): { cx: number; cy: number } {
-  return { cx: Math.floor(x / CELL_CM), cy: Math.floor(y / CELL_CM) };
+export function worldToSubCell(x: number, y: number): { cx: number; cy: number } {
+  return { cx: Math.floor(x / SUBCELL_CM), cy: Math.floor(y / SUBCELL_CM) };
 }
 
-export function cellCenter(cx: number, cy: number): Vec2 {
-  return { x: (cx + 0.5) * CELL_CM, y: (cy + 0.5) * CELL_CM };
+export function subCellCenter(cx: number, cy: number): Vec2 {
+  return { x: (cx + 0.5) * SUBCELL_CM, y: (cy + 0.5) * SUBCELL_CM };
+}
+
+/**
+ * Snap a world point onto the centre of the sub-cell containing it. Poses the
+ * robot may spin at must land here: the clearance grids test the footprint at
+ * sub-cell centres and carry no allowance for the pivot sitting off one.
+ */
+export function snapToSubCellCenter(p: Vec2): Vec2 {
+  const c = worldToSubCell(p.x, p.y);
+  return subCellCenter(c.cx, c.cy);
 }
 
 export function dist(a: Vec2, b: Vec2): number {

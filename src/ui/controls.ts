@@ -2,9 +2,9 @@
 // start pose and goal, resize the grid), display toggles, telemetry and a log.
 
 import type { FederatedPointerEvent } from "pixi.js";
-import { CELL_CM } from "../config";
 import type { Renderer } from "../render/Renderer";
-import { worldToCell } from "../sim/coords";
+import { boardToJson } from "../sim/board";
+import { snapToSubCellCenter, worldToSubCell } from "../sim/coords";
 import { type Box, type Rect, pointInBox } from "../sim/geometry";
 import type { SimStatus, Simulation } from "../sim/Simulation";
 
@@ -92,6 +92,7 @@ export class EditorUI {
           <input id="goalRadius" type="number" min="1" max="40" step="1" />
         </label>
       </div>
+      <div class="row"><button id="exportJson">Copy board JSON</button></div>
 
       <h2>Edit mode</h2>
       <div class="row">
@@ -134,6 +135,7 @@ export class EditorUI {
     };
 
     this.$("#applySize").onclick = () => this.applySize();
+    this.$("#exportJson").onclick = () => this.exportBoard();
     (this.$("#startHeading") as HTMLInputElement).onchange = (e) => {
       w.start.heading = Number((e.target as HTMLInputElement).value) || 0;
       if (this.sim.status === "idle") this.sim.reset();
@@ -157,6 +159,33 @@ export class EditorUI {
     this.paused = !this.paused;
     this.$("#pause").textContent = this.paused ? "▶ Resume" : "⏸ Pause";
     this.$("#pause").classList.toggle("active", this.paused);
+  }
+
+  /**
+   * Copy a reproducible snapshot of the board to the clipboard. The clipboard
+   * API needs a secure context and can be refused, so the JSON also goes to the
+   * log either way — a failed copy must never lose the layout.
+   */
+  private exportBoard(): void {
+    const json = boardToJson(this.sim.world);
+    const btn = this.$("#exportJson");
+    const settle = (label: string) => {
+      btn.textContent = label;
+      setTimeout(() => {
+        btn.textContent = "Copy board JSON";
+      }, 1500);
+    };
+    navigator.clipboard?.writeText(json).then(
+      () => settle("Copied ✓"),
+      () => {
+        this.appendLog(json);
+        settle("Clipboard blocked — see log");
+      },
+    );
+    if (!navigator.clipboard) {
+      this.appendLog(json);
+      settle("No clipboard — see log");
+    }
   }
 
   private applySize(): void {
@@ -237,9 +266,11 @@ export class EditorUI {
         break;
       }
       case "start": {
-        const c = worldToCell(p.x, p.y);
-        w.start.x = (c.cx + 0.5) * CELL_CM;
-        w.start.y = (c.cy + 0.5) * CELL_CM;
+        // Snapped, because the clearance grids assume a spin happens with the
+        // pivot on a sub-cell centre.
+        const s = snapToSubCellCenter(p);
+        w.start.x = s.x;
+        w.start.y = s.y;
         if (this.sim.status !== "running") this.sim.reset();
         break;
       }
@@ -304,7 +335,7 @@ export class EditorUI {
 
   refresh(): void {
     const s = this.sim;
-    const c = worldToCell(s.pivot.x, s.pivot.y);
+    const c = worldToSubCell(s.pivot.x, s.pivot.y);
     const d = s.lastSensor;
     this.$("#telemetry").innerHTML =
       `<div><span>pos</span><span>(${s.pivot.x.toFixed(1)}, ${s.pivot.y.toFixed(1)}) cm</span></div>` +

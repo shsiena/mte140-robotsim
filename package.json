@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "start": "bun server.ts"
+    "start": "bun server.ts",
+    "test": "bun test"
   },
   "dependencies": {
     "pixi.js": "^8.6.0"

@@ -3,6 +3,22 @@
 
 export const CELL_CM = 2; // each grid cell is 2cm x 2cm
 
+/**
+ * Subdivisions along each edge of a cell for the robot's internal maps. Must be
+ * a positive integer. 1 maps at board resolution; 3 splits every cell into a
+ * 3x3 block, so a 40x30 board becomes a 120x90 map.
+ *
+ * Finer maps resolve narrower gaps and quantise the footprint less, but every
+ * clearance sweep scales as the FOURTH power of this: N^2 more sub-cells, each
+ * scanning a neighbourhood N^2 larger in sub-cells. Board dimensions, obstacle
+ * editing and the drawn grid are unaffected — this only changes what the robot
+ * can represent.
+ */
+export const GRID_RESOLUTION_PER_CELL = 3;
+
+/** Edge length of one map sub-cell. All robot-side grid maths is in these. */
+export const SUBCELL_CM = CELL_CM / GRID_RESOLUTION_PER_CELL;
+
 // Robot body: a rectangle with a heading. 11 x 8 cells => 22cm x 16cm.
 // "length" runs along the heading (forward), "width" is side-to-side.
 export const ROBOT_LENGTH_CM = 22;
@@ -58,7 +74,8 @@ export const COLORS = {
   goal: 0x4fd98a,
   trail: 0x7a8aa8,
   overlayTrue: 0x9b6bff, // internal-matrix cell = true
-  overlayReachable: 0xff9b3d, // rotation-clear ("turn") cell — orange
+  overlayReachable: 0xff9b3d, // full-spin clearance ("turn") cell — orange
+  overlayTurn90: 0x3dd6d0, // quarter-turn clearance (corner only) — teal
   overlayDriveUp: 0x5b8cff, // fits facing north (drive-north gap) — blue
   overlayDriveEast: 0xff6ec7, // fits facing east (drive-east gap) — pink
 } as const;

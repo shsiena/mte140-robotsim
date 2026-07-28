@@ -2,7 +2,10 @@ import { defineConfig } from "vite";
 
 export default defineConfig({
   base: "./", // relative asset paths so the build can be served from any path
-  server: { port: 5173 },
+  server: { 
+    port: 5173, 
+    allowedHosts: ["arch"],
+  },
   build: {
     outDir: "dist",
     target: "esnext",

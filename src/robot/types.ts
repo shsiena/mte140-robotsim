@@ -60,6 +60,12 @@ export interface Robot {
    * it's yours to use however you like.
    */
   readonly reachable: BoolGrid;
+  /**
+   * Overlay (teal): cells the robot can rotate a quarter turn on, between
+   * facing north and facing east. Enough clearance to take a corner while
+   * driving through, but not necessarily to spin on the spot.
+   */
+  readonly turn90: BoolGrid;
   /** Extra overlay (blue): cells the robot fits in facing north (drive-north). */
   readonly driveUp: BoolGrid;
   /** Extra overlay (pink): cells the robot fits in facing east (drive-east). */

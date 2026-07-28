@@ -3,7 +3,14 @@
 // sim code never has to think about screen coordinates.
 
 import { Application, Container, Graphics, type PointData } from "pixi.js";
-import { CELL_CM, COLORS, OVERLAY_ALPHA, SENSOR_MAX_CM } from "../config";
+import {
+  CELL_CM,
+  COLORS,
+  OVERLAY_ALPHA,
+  SENSOR_MAX_CM,
+  SUBCELL_CM,
+} from "../config";
+import type { BoolGrid } from "../robot/types";
 import {
   // add,
   headingToVec,
@@ -26,6 +33,7 @@ export class Renderer {
   private gridG = new Graphics();
   private overlayG = new Graphics();
   private driveG = new Graphics();
+  private turn90G = new Graphics();
   private reachableG = new Graphics();
   private trailG = new Graphics();
   private goalG = new Graphics();
@@ -55,6 +63,7 @@ export class Renderer {
       this.gridG,
       this.overlayG,
       this.driveG,
+      this.turn90G,
       this.reachableG,
       this.trailG,
       this.goalG,
@@ -96,6 +105,7 @@ export class Renderer {
     this.drawGrid(sim);
     this.drawOverlay(sim);
     this.drawDriveCells(sim);
+    this.drawTurn90(sim);
     this.drawReachable(sim);
     this.drawTrail(sim);
     this.drawGoal(sim);
@@ -125,55 +135,58 @@ export class Renderer {
     g.rect(0, 0, w, h).stroke({ width: this.px(2), color: COLORS.gridBorder });
   }
 
-  private drawOverlay(sim: Simulation): void {
-    const g = this.overlayG.clear();
-    const raw = sim.world.overlay.raw;
-    for (let cy = 0; cy < sim.world.rows; cy++) {
-      for (let cx = 0; cx < sim.world.cols; cx++) {
-        if (raw[cy][cx]) {
-          g.rect(cx * CELL_CM, cy * CELL_CM, CELL_CM, CELL_CM);
+  /**
+   * One tint pass over a map grid, drawn at SUBCELL_CM — the resolution the
+   * robot reasons at, finer than the drawn CELL_CM grid by
+   * GRID_RESOLUTION_PER_CELL. `except` suppresses sub-cells another pass
+   * already covers, so overlapping layers stay readable.
+   */
+  private tintGrid(
+    g: Graphics,
+    grid: BoolGrid,
+    color: number,
+    except?: BoolGrid,
+  ): void {
+    const raw = grid.raw;
+    for (let cy = 0; cy < grid.rows; cy++) {
+      for (let cx = 0; cx < grid.cols; cx++) {
+        if (raw[cy][cx] && !except?.get(cx, cy)) {
+          g.rect(cx * SUBCELL_CM, cy * SUBCELL_CM, SUBCELL_CM, SUBCELL_CM);
         }
       }
     }
-    g.fill({ color: COLORS.overlayTrue, alpha: OVERLAY_ALPHA });
+    g.fill({ color, alpha: OVERLAY_ALPHA });
+  }
+
+  private drawOverlay(sim: Simulation): void {
+    this.tintGrid(this.overlayG.clear(), sim.world.overlay, COLORS.overlayTrue);
   }
 
   private drawDriveCells(sim: Simulation): void {
     const g = this.driveG.clear();
-    const up = sim.world.driveUp.raw;
-    const east = sim.world.driveEast.raw;
-    const reach = sim.world.reachable.raw;
-    // Only draw the "extra" gap cells (drivable but not a turn cell), so orange
-    // turn cells stay distinct.
-    for (let cy = 0; cy < sim.world.rows; cy++) {
-      for (let cx = 0; cx < sim.world.cols; cx++) {
-        if (east[cy][cx] && !reach[cy][cx]) {
-          g.rect(cx * CELL_CM, cy * CELL_CM, CELL_CM, CELL_CM);
-        }
-      }
-    }
-    g.fill({ color: COLORS.overlayDriveEast, alpha: OVERLAY_ALPHA });
-    for (let cy = 0; cy < sim.world.rows; cy++) {
-      for (let cx = 0; cx < sim.world.cols; cx++) {
-        if (up[cy][cx] && !reach[cy][cx]) {
-          g.rect(cx * CELL_CM, cy * CELL_CM, CELL_CM, CELL_CM);
-        }
-      }
-    }
-    g.fill({ color: COLORS.overlayDriveUp, alpha: OVERLAY_ALPHA });
+    const w = sim.world;
+    // Only the "extra" gap cells — drivable but not even cornerable. Excluding
+    // turn90 is enough to exclude reachable too, since reachable ⊆ turn90.
+    this.tintGrid(g, w.driveEast, COLORS.overlayDriveEast, w.turn90);
+    this.tintGrid(g, w.driveUp, COLORS.overlayDriveUp, w.turn90);
+  }
+
+  /** Corner-capable but not spin-capable: teal under the orange spin tint. */
+  private drawTurn90(sim: Simulation): void {
+    this.tintGrid(
+      this.turn90G.clear(),
+      sim.world.turn90,
+      COLORS.overlayTurn90,
+      sim.world.reachable,
+    );
   }
 
   private drawReachable(sim: Simulation): void {
-    const g = this.reachableG.clear();
-    const raw = sim.world.reachable.raw;
-    for (let cy = 0; cy < sim.world.rows; cy++) {
-      for (let cx = 0; cx < sim.world.cols; cx++) {
-        if (raw[cy][cx]) {
-          g.rect(cx * CELL_CM, cy * CELL_CM, CELL_CM, CELL_CM);
-        }
-      }
-    }
-    g.fill({ color: COLORS.overlayReachable, alpha: OVERLAY_ALPHA });
+    this.tintGrid(
+      this.reachableG.clear(),
+      sim.world.reachable,
+      COLORS.overlayReachable,
+    );
   }
 
   private drawTrail(sim: Simulation): void {

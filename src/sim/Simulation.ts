@@ -8,6 +8,7 @@ import {
   DEFAULT_TURN_DEG_S,
   MAX_SUBSTEP_CM,
   MAX_SUBSTEP_DEG,
+  SUBCELL_CM,
 } from "../config";
 import type { BoolGrid, Robot } from "../robot/types";
 import {
@@ -17,7 +18,7 @@ import {
   dist,
   headingToVec,
   normalizeDeg,
-  worldToCell,
+  worldToSubCell,
 } from "./coords";
 import { measureCone, robotHitsAny, sensorOrigin } from "./geometry";
 import { World } from "./World";
@@ -366,7 +367,7 @@ class RobotApi implements Robot {
     return { x: this.sim.pivot.x, y: this.sim.pivot.y };
   }
   cell(): { cx: number; cy: number } {
-    return worldToCell(this.sim.pivot.x, this.sim.pivot.y);
+    return worldToSubCell(this.sim.pivot.x, this.sim.pivot.y);
   }
   heading(): number {
     return this.sim.heading;
@@ -379,7 +380,12 @@ class RobotApi implements Robot {
     return { x: g.x, y: g.y, radius: g.radius };
   }
   gridSize(): { cols: number; rows: number; cellCm: number } {
-    return { cols: this.sim.world.cols, rows: this.sim.world.rows, cellCm: 2 };
+    // Map dimensions, not board dimensions: these match r.grid and r.cell().
+    return {
+      cols: this.sim.world.overlay.cols,
+      rows: this.sim.world.overlay.rows,
+      cellCm: SUBCELL_CM,
+    };
   }
 
   driveFor(cm: number): Promise<void> {
@@ -415,6 +421,10 @@ class RobotApi implements Robot {
 
   get reachable(): BoolGrid {
     return this.sim.world.reachable;
+  }
+
+  get turn90(): BoolGrid {
+    return this.sim.world.turn90;
   }
 
   get driveUp(): BoolGrid {
