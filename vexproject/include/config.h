@@ -20,8 +20,8 @@ constexpr double CELL_CM = 2.0;
 constexpr int GRID_RESOLUTION_PER_CELL = 3;
 constexpr double SUBCELL_CM = CELL_CM / GRID_RESOLUTION_PER_CELL;
 
-constexpr int BOARD_COLS = 40;
-constexpr int BOARD_ROWS = 30;
+constexpr int BOARD_COLS = 30;
+constexpr int BOARD_ROWS = 20;
 constexpr int GRID_COLS = BOARD_COLS * GRID_RESOLUTION_PER_CELL;
 constexpr int GRID_ROWS = BOARD_ROWS * GRID_RESOLUTION_PER_CELL;
 
@@ -40,7 +40,7 @@ constexpr double SENSOR_FORWARD_CM = PIVOT_TO_FRONT_CM;
 constexpr double SENSOR_RIGHT_CM = 0.0;
 constexpr double SENSOR_CONE_DEG = 24.19;
 constexpr double SENSOR_HALF_CONE_DEG = SENSOR_CONE_DEG / 2.0;
-constexpr double SENSOR_MAX_CM = 304.0;
+constexpr double SENSOR_MAX_CM = 80;
 
 // Clearance the body is padded by on every side before it is tested against
 // the map, absorbing odometry drift and sensor quantisation.

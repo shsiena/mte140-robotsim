@@ -33,8 +33,13 @@ const double EXTERNAL_GEAR_RATIO = 1.0;  // TODO: confirm
 
 // Slow enough that the sub-cell map is not outrun between polling ticks: at
 // 10ms a tick, a fast IQ drivetrain covers most of a 0.67cm sub-cell per tick.
+//
+// The turn velocity also sets how finely a sweep is sampled, since the sensor
+// is read once per tick throughout: halving it doubles the number of readings
+// per degree of arc. If a turn ever fails to start from rest, this is the
+// value that has gone under what it takes to break static friction.
 const double DRIVE_VELOCITY_PCT = 40.0;
-const double TURN_VELOCITY_PCT = 25.0;
+const double TURN_VELOCITY_PCT = 12.0;
 
 // Ceiling on any one leg, so a jammed wheel cannot hang the run indefinitely.
 // The longest leg the planner can produce is the board diagonal.
@@ -46,13 +51,16 @@ const int32_t MOTION_TIMEOUT_SEC = 10;
 // out below what it takes to break static friction: the motors are commanded,
 // nothing rotates, and the turn sits there until it times out. A fixed
 // velocity with a floor under it turns the same 1 degree in a couple of ticks.
-const double TURN_CRAWL_PCT = 12.0;
+const double TURN_CRAWL_PCT = 9.0;
 // Error below which the crawl velocity is used instead of the full one.
 const double TURN_APPROACH_DEG = 10.0;
 // Close enough to stop. Has to stay under the 1 degree sweep step, or a sweep
 // step would be considered already arrived and the robot would never rotate.
 const float TURN_TOLERANCE_DEG = 0.5f;
-const uint32_t TURN_TIMEOUT_MS = 4000;
+// Generous, because it has to clear the slowest legitimate turn: a 90 degree
+// sweep leg at TURN_VELOCITY_PCT. Tripping this ends the run outright, so it
+// is set to catch a jammed robot rather than to bound a slow one.
+const uint32_t TURN_TIMEOUT_MS = 12000;
 
 // The inertial sensor keeps reporting the previous calibration state for a
 // moment after one is requested, so the wait has to start after a short delay
@@ -62,27 +70,42 @@ const uint32_t IMU_CALIBRATE_TIMEOUT_MS = 5000;
 
 // --- polling -----------------------------------------------------------------
 
-const uint32_t POLL_MS = 10;
+// One sensor reading, one pose update and one map update per tick, so this is
+// the sampling rate of the whole system.
+const uint32_t POLL_MS = 5;
 
 // The drivetrain reports itself stopped in the window between a motion being
 // commanded and the motors spinning up, which would end a poll loop before it
 // began.
 const uint32_t MOTION_GRACE_MS = 60;
 
-// A drive that produces less than this much travel per tick, for this many
-// consecutive ticks, is pushing against something. Neither value is critical:
-// the point is to end the run rather than grind, and to be well clear of what
-// the drivetrain produces while it is accelerating.
-const float STALL_TRAVEL_CM = 0.02f;
-const int STALL_TICKS = 25;
+// A drive making less headway than this, for this long, is pushing against
+// something. Neither value is critical: the point is to end the run rather
+// than grind, and to be well clear of what the drivetrain produces while it is
+// accelerating. Both are expressed against the clock and converted, so that
+// changing POLL_MS does not quietly change what counts as a collision.
+const float STALL_SPEED_CM_PER_S = 2.0f;
+const uint32_t STALL_WINDOW_MS = 250;
+
+const float STALL_TRAVEL_CM =
+    STALL_SPEED_CM_PER_S * static_cast<float>(POLL_MS) / 1000.0f;
+const int STALL_TICKS = static_cast<int>(STALL_WINDOW_MS / POLL_MS);
 
 // --- debug -------------------------------------------------------------------
 
-// Most of the screen is the live map view drawn by main.cpp, so everything
-// written here goes in the bands screen.h reserves around it. Only the last
-// log line survives on screen; the full history goes to the serial console.
+// The top rows carry a live status block and the bottom ones the scrolling
+// log, so neither overwrites the other.
+const int STATUS_ROWS = 3;
+const int LOG_FIRST_ROW = 4;
+const int LOG_LAST_ROW = 6;
 
-const bool DEBUG_TO_SCREEN = true;
+// The map display in main.cpp owns the screen now, so the status block and the
+// log go to the serial console only. Turning either of these back on will draw
+// over the map, and once the map calls render() the screen is double buffered,
+// so text written between frames only appears when the next one lands. Both
+// still print over USB regardless.
+const bool DEBUG_TO_SCREEN = false;
+const bool LOG_TO_SCREEN = false;
 
 // Redrawing the screen costs far more than a polling tick, so the status is
 // throttled rather than drawn on every one.
@@ -94,10 +117,12 @@ const uint32_t DEBUG_REFRESH_MS = 150;
 // ends rather than running forever. Note that the algorithm's own motion loops
 // are not ours to bound, which is why this lives in isMoving() rather than in
 // settle().
-const uint32_t MOTION_CAP_MS = 12000;
+// Has to sit above TURN_TIMEOUT_MS so that a stuck turn is diagnosed as one
+// rather than swept up by the general backstop.
+const uint32_t MOTION_CAP_MS = 20000;
 
 // Bound on a blocking turn, which is ours to end.
-const uint32_t SETTLE_CAP_MS = 6000;
+const uint32_t SETTLE_CAP_MS = 15000;
 
 // How near the commanded odometer reading a drive has to land to count as
 // arrived. Under one sub-cell, so the map never disagrees with the pose about
@@ -429,11 +454,13 @@ void VexRobot::checkForGoal() {
 }
 
 void VexRobot::log(const char* message) {
-  // Printed opaquely and padded, so the tail of a longer previous message is
-  // covered rather than left behind. Clearing the line instead would take the
-  // map with it.
-  brain_.Screen.setPenColor(vex::color::white);
-  brain_.Screen.printAt(screen::MAP_X, screen::LOG_Y, true, "%-20s", message);
+  if (LOG_TO_SCREEN) {
+    brain_.Screen.clearLine(logRow_);
+    brain_.Screen.setCursor(logRow_, 1);
+    brain_.Screen.print("%s", message);
+    // Wrapping within the log rows, so the status block above survives.
+    if (++logRow_ > LOG_LAST_ROW) logRow_ = LOG_FIRST_ROW;
+  }
   printf("%s\n", message);
 }
 

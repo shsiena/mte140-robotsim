@@ -25,7 +25,6 @@ vex::brain       Brain;
 #include "config.h"
 #include "masks.h"
 #include "robot.h"
-#include "screen.h"
 #include "vexrobot.h"
 
 
@@ -450,124 +449,137 @@ void clearStartZone(IRobot& r) {
   }
 }
 
-// --- map view ---------------------------------------------------------------
+// --- map display ------------------------------------------------------------
 
-// The internal maps drawn live on the brain screen, one pixel per sub-cell,
-// with the robot and the goal overlaid so the pose can be read against what
-// the robot believes about the board.
-//
-// Rows are painted as runs of equal cells rather than pixel by pixel. The maps
-// are mostly large uniform regions, a swept-clear cone against unknown space,
-// so a row usually costs a handful of line draws instead of 120 pixel draws.
+// Draws what the algorithm believes about the board, live, so its internal
+// state can be watched rather than inferred. One sub-cell is one pixel: the
+// screen is 160x128 and the grid is 120x90, so the largest whole-pixel scale
+// that fits is 1:1, centred.
 
-enum MapId {
-  MAP_OCCUPANCY = 0,
-  MAP_REACHABLE,
-  MAP_TURN90,
-  MAP_DRIVE_UP,
-  MAP_DRIVE_EAST,
-  MAP_COUNT
-};
+const int SCREEN_W = 160;
+const int SCREEN_H = 128;
+const int MAP_X0 = (SCREEN_W - COLS) / 2;
+const int MAP_Y0 = (SCREEN_H - ROWS) / 2;
 
-// Short enough for the strip beside the map.
-const char* const MAP_LABELS[MAP_COUNT] = {"occ", "rch", "t90", "dUp", "dEa"};
-
-MapId shownMap = MAP_OCCUPANCY;
+// Redrawing the whole map costs far more than a polling tick does, so the view
+// is throttled rather than redrawn on every one.
+const uint32_t MAP_REFRESH_MS = 250;
 uint32_t lastMapDrawMs = 0;
 
-const Map& mapById(MapId id) {
-  switch (id) {
-    case MAP_REACHABLE: return reachable;
-    case MAP_TURN90: return turn90;
-    case MAP_DRIVE_UP: return driveUp;
-    case MAP_DRIVE_EAST: return driveEast;
-    default: return occupancy;
+// World y runs up the board, screen y runs down the screen.
+int screenXOf(int cx) { return MAP_X0 + cx; }
+int screenYOf(int cy) { return MAP_Y0 + (ROWS - 1 - cy); }
+
+// Every map the algorithm keeps, drawn at once, each in its own colour.
+//
+// They nest: room for a full spin implies room to corner, and room to corner
+// implies both driving poses fit. A pixel can only be one colour, so each
+// sub-cell is drawn as the most specific class it belongs to, most specific
+// first.
+//
+//   black   nothing known yet, or blocked          occupancy set
+//   blue    sensor cleared it, no pose fits
+//   cyan    fits facing north only                 driveUp
+//   purple  fits facing east only                  driveEast
+//   orange  both driving poses fit, cannot corner
+//   yellow  room to corner                         turn90
+//   white   room for a full spin                   reachable
+//
+// Red is the robot and green the goal, so neither appears in the map palette.
+const int CLASS_UNKNOWN = 0;
+const int CLASS_CLEAR = 1;
+const int CLASS_NORTH = 2;
+const int CLASS_EAST = 3;
+const int CLASS_BOTH = 4;
+const int CLASS_CORNER = 5;
+const int CLASS_SPIN = 6;
+
+int classOf(int cx, int cy) {
+  if (occupancy.get(cx, cy)) return CLASS_UNKNOWN;
+  if (reachable.get(cx, cy)) return CLASS_SPIN;
+  if (turn90.get(cx, cy)) return CLASS_CORNER;
+  const bool north = driveUp.get(cx, cy);
+  const bool east = driveEast.get(cx, cy);
+  if (north && east) return CLASS_BOTH;
+  if (north) return CLASS_NORTH;
+  if (east) return CLASS_EAST;
+  return CLASS_CLEAR;
+}
+
+const color& inkFor(int cellClass) {
+  switch (cellClass) {
+    case CLASS_SPIN: return color::white;
+    case CLASS_CORNER: return color::yellow;
+    case CLASS_BOTH: return color::orange;
+    case CLASS_EAST: return color::purple;
+    case CLASS_NORTH: return color::cyan;
+    default: return color::blue;
   }
 }
 
-// The brain's two navigation buttons cycle through the maps. Edge triggered,
-// since this is polled far faster than a button can be released.
-void serviceMapButtons() {
-  static bool upWasPressed = false;
-  static bool downWasPressed = false;
-
-  const bool up = Brain.buttonUp.pressing();
-  const bool down = Brain.buttonDown.pressing();
-  if (up && !upWasPressed) {
-    shownMap = static_cast<MapId>((shownMap + 1) % MAP_COUNT);
-  }
-  if (down && !downWasPressed) {
-    shownMap = static_cast<MapId>((shownMap + MAP_COUNT - 1) % MAP_COUNT);
-  }
-  upWasPressed = up;
-  downWasPressed = down;
+void drawClassRun(int cellClass, int cx, int cy, int width) {
+  // Unknown is the background, so it is never drawn: on a board the robot has
+  // barely seen, almost nothing costs anything to render.
+  if (cellClass == CLASS_UNKNOWN) return;
+  const color& ink = inkFor(cellClass);
+  Brain.Screen.setPenColor(ink);
+  Brain.Screen.setFillColor(ink);
+  Brain.Screen.drawRectangle(screenXOf(cx), screenYOf(cy), width, 1);
 }
 
-// Screen y grows downwards and the map's cy grows upwards.
-int screenYOf(int cy) { return screen::MAP_Y + (ROWS - 1 - cy); }
-
-void drawMapRows(const Map& map, const vex::color& setColor) {
-  Brain.Screen.setPenWidth(1);
-  for (int cy = 0; cy < ROWS; cy++) {
-    const int y = screenYOf(cy);
-    int runStart = 0;
-    bool runValue = map.get(0, cy);
-    // One past the last column, so the final run is always flushed.
-    for (int cx = 1; cx <= COLS; cx++) {
-      const bool value = cx < COLS ? map.get(cx, cy) : !runValue;
-      if (value == runValue) continue;
-      Brain.Screen.setPenColor(runValue ? setColor : vex::color::black);
-      Brain.Screen.drawLine(screen::MAP_X + runStart, y, screen::MAP_X + cx - 1,
-                            y);
-      runStart = cx;
-      runValue = value;
-    }
-  }
-}
-
-void drawMapOverlays(IRobot& r) {
-  Brain.Screen.setFillColor(vex::color::transparent);
-
-  const Goal goal = r.goal();
-  const Cell goalCell = cellAt(goal.x, goal.y);
-  Brain.Screen.setPenColor(vex::color::yellow);
-  Brain.Screen.drawCircle(screen::MAP_X + goalCell.cx, screenYOf(goalCell.cy),
-                          static_cast<int>(goal.radius / SUBCELL_CM));
-
-  // The pivot, plus a stub in the direction the robot is facing.
+void drawRobot(IRobot& r) {
   const Vec2 p = r.position();
   const Cell here = cellAt(p.x, p.y);
-  const int x = screen::MAP_X + here.cx;
+  const int x = screenXOf(here.cx);
   const int y = screenYOf(here.cy);
-  const float radians = r.heading() * DEG_TO_RAD;
-  const int noseLength = 6;
 
-  Brain.Screen.setPenColor(vex::color::red);
+  // A tick showing which way it is facing, drawn from the pivot outwards.
+  const float radians = r.heading() * DEG_TO_RAD;
+  const int tipX = x + static_cast<int>(sinf(radians) * 8.0f);
+  const int tipY = y - static_cast<int>(cosf(radians) * 8.0f);
+  Brain.Screen.setPenColor(color::yellow);
+  Brain.Screen.drawLine(x, y, tipX, tipY);
+
+  Brain.Screen.setPenColor(color::red);
+  Brain.Screen.setFillColor(color::red);
   Brain.Screen.drawCircle(x, y, 2);
-  Brain.Screen.drawLine(
-      x, y, x + static_cast<int>(sinf(radians) * noseLength),
-      y - static_cast<int>(cosf(radians) * noseLength));
 }
 
-// Repaints the map, throttled. Safe to call as often as is convenient.
-void drawMapView(IRobot& r) {
+void drawGoal(IRobot& r) {
+  const Goal goal = r.goal();
+  const Cell centre = cellAt(goal.x, goal.y);
+  Brain.Screen.setPenColor(color::green);
+  Brain.Screen.setFillColor(color::transparent);
+  Brain.Screen.drawCircle(screenXOf(centre.cx), screenYOf(centre.cy),
+                          static_cast<int>(goal.radius / SUBCELL_CM));
+}
+
+void drawMap(IRobot& r) {
   const uint32_t now = vex::timer::system();
-  if (now - lastMapDrawMs < screen::MAP_REFRESH_MS) return;
+  if (now - lastMapDrawMs < MAP_REFRESH_MS) return;
   lastMapDrawMs = now;
 
-  serviceMapButtons();
+  Brain.Screen.clearScreen(color::black);
 
-  // A set bit means blocked or unknown in the occupancy map, but means the
-  // pose fits in the clearance maps, so the two are coloured differently to
-  // keep "white is something to avoid" from reading backwards.
-  const vex::color& setColor = shownMap == MAP_OCCUPANCY ? vex::color::white
-                                                         : vex::color::green;
-  drawMapRows(mapById(shownMap), setColor);
-  drawMapOverlays(r);
+  // Runs of equal class go out as one rectangle each. A map row is 120 pixels
+  // wide, and drawing it a pixel at a time would be tens of thousands of calls
+  // a frame.
+  for (int cy = 0; cy < ROWS; cy++) {
+    int runStart = 0;
+    int runClass = classOf(0, cy);
+    for (int cx = 1; cx <= COLS; cx++) {
+      // One past the last column closes whatever run is open.
+      const int cellClass = cx < COLS ? classOf(cx, cy) : CLASS_UNKNOWN;
+      if (cellClass == runClass) continue;
+      drawClassRun(runClass, runStart, cy, cx - runStart);
+      runStart = cx;
+      runClass = cellClass;
+    }
+  }
 
-  Brain.Screen.setPenColor(vex::color::white);
-  Brain.Screen.printAt(screen::SIDE_X, screen::SIDE_NAME_Y, true, "%s",
-                       MAP_LABELS[shownMap]);
+  drawGoal(r);
+  drawRobot(r);
+  Brain.Screen.render();
 }
 
 // --- driving ----------------------------------------------------------------
@@ -576,7 +588,7 @@ void whileMoving(IRobot& r) {
   while (r.isMoving() && !r.finished()) {
     r.step();
     markFree(r);
-    drawMapView(r);
+    drawMap(r);
   }
 }
 
@@ -665,6 +677,7 @@ void run(IRobot& r) {
   occupancy.fill(true);
   clearStartZone(r);
   computeClearance();
+  drawMap(r);
 
   // Every direction change the robot makes while driving a route, in order.
   LinkedList turns;
@@ -674,10 +687,10 @@ void run(IRobot& r) {
     scan(r);
     if (r.finished()) return;
     computeClearance();
-    // The clearance maps only change here, so this is the one point where
-    // showing one of them is worth forcing a repaint for.
+    // The derived maps have just been rebuilt, so this is the one redraw that
+    // shows the planner's view rather than the sensor's.
     lastMapDrawMs = 0;
-    drawMapView(r);
+    drawMap(r);
     if (withinGoal(r.goal(), r.position())) {
       r.log("goal reached");
       return;
