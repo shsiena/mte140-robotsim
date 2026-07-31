@@ -129,8 +129,6 @@ uint8_t addTurn(uint8_t turns) {
   return turns == NO_ROUTE ? NO_ROUTE : static_cast<uint8_t>(turns + 1);
 }
 
-// walk the predecessor flags back to the start, recovering each step's arrival
-// heading as it goes.
 int backtrack(const Cell& start, const Candidate& target) {
   int i = target.i;
   int j = target.j;
@@ -159,7 +157,6 @@ int backtrack(const Cell& start, const Candidate& target) {
   return count;
 }
 
-// reduce a cell path to just its direction changes.
 int cornerCells(const Cell* cells, int count) {
   if (count <= 2) {
     memcpy(routeCorners, cells, static_cast<size_t>(count) * sizeof(Cell));
@@ -184,6 +181,8 @@ struct Route {
 // search the box between the robot and the far edge of the goal zone and take
 // the fewest-turn route into the goal. failing that, take a route to the
 // nearest vantage point it can sweep from.
+//
+// ALGORITHM: dynamic programming - bottom-up tabulation
 bool planRoute(IRobot& r, Route& route) {
   const Vec2 here = r.position();
   const Cell start = cellAt(here.x, here.y);
@@ -272,6 +271,39 @@ bool planRoute(IRobot& r, Route& route) {
     // virgin C++ copy constructor user vs chad C memcpy enjoyer
     memcpy(previousEast, currentEast, sizeof(previousEast));
     memcpy(previousNorth, currentNorth, sizeof(previousNorth));
+
+    /*
+      ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡿⠿⠿⠟⠛⠛⠛⠛⠛⠿⢿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
+      ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡿⠋⠁⠀⠀⠀⠀⠀⠀⠀⠄⠀⠀⠀⠙⠛⢿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
+      ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠟⢀⣀⣀⣄⣤⣤⣦⣶⣶⣤⣀⠀⠀⠀⠀⠀⠈⢻⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
+      ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡏⣰⠿⡏⠁⠕⢚⣿⣿⣿⣿⣿⡟⠀⠀⠀⠀⠀⠀⠀⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
+      ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠰⠠⠀⠀⠀⠀⠲⠚⠉⠓⢿⣿⣧⣄⠀⠀⠀⠀⠀⠀⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
+      ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡿⠔⠀⠂⠀⠀⠀⠀⠀⠀⠐⠠⠈⢻⣿⣷⡀⠀⠀⠀⠀⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
+      ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡋⢀⠀⠀⠀⢰⣾⠀⠀⠀⠀⠀⠀⠔⠐⠛⣿⠆⠀⢀⠔⢀⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
+      ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⡄⠠⠀⢠⣺⣿⡀⠀⠀⠀⠲⣷⡊⠨⢲⡩⠇⠀⣈⠁⠀⠀⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
+      ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⢳⠀⢀⠸⠭⠅⠲⠀⠀⠐⠀⢄⠉⠊⠙⠀⠀⠀⢸⣁⡁⢠⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
+      ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡜⠂⠀⠀⠀⠀⠀⠀⠀⠀⠀⠱⠀⠀⠀⠀⠀⠀⠈⣡⢰⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
+      ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣯⠁⠀⠐⠀⠠⠠⠐⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢹⣸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
+      ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡄⠀⠰⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
+      ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣴⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
+      ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡏⠄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣠⣴⣾⢟⣽⣿⣿⡿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
+      ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⠁⠀⠀⠀⠀⠀⠀⠀⠀⢀⣴⣿⣟⣿⣿⣿⣿⣿⣿⣇⠹⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
+      ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣤⣄⣀⣀⣀⣀⠀⠀⢛⣏⣽⣿⣿⣿⣾⣿⣿⣿⣿⣾⣶⣯⣍⡛⡛⠿⢿⣿⣿⣿⣿⣿
+      ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⢹⡕⠀⠀⠸⣿⣿⣽⣿⣿⣿⣿⣿⣿⣿⣽⣿⠟⢫⠘⢑⠴⣢⣄⡉⠛⠻⢿
+      ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⢸⣿⣶⡀⠀⢺⣿⠟⣹⣿⣿⣿⣿⣿⣿⣿⣷⣇⠀⠀⠀⠀⠘⡵⠫⢴⡗⠄
+      ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⢿⣻⣕⢾⣿⣿⣦⠀⠘⠫⠐⣿⣿⣿⣾⣿⣿⣿⣿⣿⢗⣅⠀⠀⠀⠀⠀⠐⢼⠟⠇
+      ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡿⢫⣶⢛⡟⡍⢸⣟⡼⡘⠀⠀⠀⠈⢹⣿⠃⠉⠈⠁⠙⢑⣉⣁⣀⣤⣤⣤⣤⣶⣶⠔⠀⠀
+      ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠿⣫⣞⠵⡕⣮⣬⣴⡾⡿⢶⣷⠀⠀⠀⡆⠈⣁⡠⠔⢶⡞⢫⢻⢿⠙⠛⠋⣻⢿⡿⣿⠃⠀⡠⣴
+      ⣿⣿⣿⣿⣿⣿⣿⣿⣿⡿⢟⣭⣷⣶⣦⢠⡿⣠⣿⣶⣧⣴⣐⣠⡬⠉⠃⠀⡜⡠⠾⠙⠃⠀⠀⠀⠠⢄⢆⡐⠤⢑⠟⠟⠏⠀⠀⣼⣿⣿
+      ⣿⣿⣿⡿⢟⣻⣭⣶⣾⣿⣿⣿⣿⣿⣟⣁⣽⡏⢝⢿⣯⢷⣝⠋⠀⠀⠉⠛⡗⠁⠀⠀⠀⢀⡠⣴⣾⡻⠞⠾⣨⡀⡀⠀⠀⠀⠈⢿⣿⣻
+      ⣿⠟⣫⣾⣿⣿⣿⣿⣿⡿⢻⣿⣿⣷⣿⣿⣼⣿⡡⣘⠚⠏⠀⠀⠀⠀⠀⠀⠈⠄⠀⡄⢠⣀⡋⣷⣿⣿⣖⡁⢔⡅⠂⠀⠀⠀⠀⠀⠋⠞
+      ⣡⣾⣿⣿⣿⣿⣿⡿⠋⣴⣿⣿⣿⣿⣿⣻⡻⠿⠑⡽⢿⠖⡝⠁⠀⠀⠀⠀⠀⠂⢀⠤⣘⣙⣽⣻⡿⣈⡆⠭⠀⠈⠨⠡⠀⠀⠀⠀⠀⠀
+      ⣿⣿⣿⣿⣿⣿⡿⠓⢇⢾⣿⣿⣿⢛⣿⣷⣿⣿⢻⡧⣝⠏⠀⠀⠀⠀⠀⣀⢀⡂⣲⢢⢨⣭⣼⡣⡉⠁⠀⠁⠄⠀⠀⠈⠀⠀⠀⠀⠀⠀
+      ⣿⣿⣿⣿⣿⣿⡇⠀⢠⡿⢿⢿⣇⡿⠛⢻⢻⠐⠘⠈⠀⢀⠀⠀⠀⠀⢠⠷⢋⡛⣆⣭⡪⠦⠍⠃⠀⠀⠀⠀⠊⠀⠀⠀⠀⠀⢑⣶⣆⣄
+                    AVERAGE MEMCPY ENJOYER
+
+       (DOES NOT CONCERN HIMSELF WITH BUFFER OVERFLOWS)
+    */
   }
 
   if (!haveGoal && !haveVantage) return false;
@@ -366,8 +398,7 @@ void markFree(IRobot& r) {
   }
 }
 
-// clear the area around the start. assumes the robot was placed with room to
-// spin, which is the one thing about the board we could rely on.
+// assumes the robot was placed with room to spin
 void clearStartZone(IRobot& r) {
   const Vec2 p = r.position();
   const Cell lo = cellAt(p.x - START_CLEAR_RADIUS_CM, p.y - START_CLEAR_RADIUS_CM);
@@ -461,7 +492,7 @@ void driveRoute(IRobot& r, int cornerCount, LinkedList& waypoints) {
     const float targetDeg = drivesEast ? EAST_DEG : NORTH_DEG;
 
     // record where it changes direction, not where it carries straight on
-    // (to minimized linked list nodes and save on heap space)
+    // (to minimize linked list nodes and save on heap space)
     if (!headingIs(r.heading(), targetDeg)) {
       const Vec2 p = r.position();
       waypoints.add(p.x, p.y, targetDeg);
@@ -510,7 +541,6 @@ void run(IRobot& r) {
   computeClearance();
   drawMap(r);
 
-  // every direction change made while driving a route, in order.
   LinkedList waypoints;
   explore(r, waypoints);
   drawWaypoints(waypoints);

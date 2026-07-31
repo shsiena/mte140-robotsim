@@ -7,17 +7,11 @@
 namespace {
 
 // --- hardware ----------------------------------------------------------------
-// edit this block to match the built robot. everything else in this file is
-// written against these values. none of them were ever confirmed against the
-// real build, so if the robot sits there doing nothing, start here: begin()
-// gives up when a device does not report itself installed.
 
 const int32_t LEFT_MOTOR_PORT = vex::PORT1;
 const int32_t RIGHT_MOTOR_PORT = vex::PORT6;
 const int32_t DISTANCE_SENSOR_PORT = vex::PORT4;
 
-// one side is mounted facing the other way, so its encoder and command sense
-// both flip for "forward" to mean the same thing on both.
 const bool LEFT_MOTOR_REVERSED = false;
 const bool RIGHT_MOTOR_REVERSED = true;
 
@@ -26,65 +20,71 @@ const bool RIGHT_MOTOR_REVERSED = true;
 const double WHEEL_TRAVEL_CM = 20.0;
 const double TRACK_WIDTH_CM = 20.0;
 const double WHEEL_BASE_CM = 5.0;
-
-// motor revolutions per wheel revolution. 1.0 for a direct drive, which is also
-// the case where the drivetrain's gear-ratio convention cannot disagree with
-// odometerCm() below. if the build is geared and driveFor() distances come out
-// scaled, invert this in odometerCm().
 const double EXTERNAL_GEAR_RATIO = 1.0;
+
+// the inertial sensor keeps reporting the previous calibration state for a
+// moment after one is requested, so the wait has to start after a short delay
+// or it falls through
+//
+// this had to be experimentally determined
+const uint32_t IMU_SETTLE_MS = 100;
+const uint32_t IMU_CALIBRATE_TIMEOUT_MS = 5000;
+
+// --- motion ------------------------------------------------------------------
 
 // slow enough that the sub-cell map is not outrun between ticks.
 //
 // turn velocity also sets how finely a sweep is sampled, since the sensor is
 // read once per tick throughout: halving it doubles the readings per degree of
-// arc. if a turn ever fails to start from rest, this has gone under what it
-// takes to break static friction.
+// arc. if a turn ever fails to start from rest, this has likely been set below what it
+// takes to overcome static friction.
 const double DRIVE_VELOCITY_PCT = 40.0;
 const double TURN_VELOCITY_PCT = 12.0;
 
-// ceiling on any one leg. without it a jammed wheel hangs the run indefinitely.
-// the longest leg the planner can produce is the board diagonal.
-const int32_t MOTION_TIMEOUT_SEC = 10;
-
 // turns are closed against the inertial sensor here rather than handed to
-// smartdrive::turnToHeading, which scales motor velocity by the heading error.
-// near the target that comes out under what it takes to break static friction:
-// the motors are commanded, nothing rotates, and the turn sits there until it
-// times out. a fixed velocity with a floor under it does not stall.
+// smartdrive::turnToHeading, which has some sort of PID loop, seeming to scale motor velocity by the heading error.
+// near the target that comes out under what it takes to break static friction
+//
+// this had to be figured out at the last minute :/
 const double TURN_CRAWL_PCT = 9.0;
+
 // error below which the crawl velocity is used instead of the full one.
 const double TURN_APPROACH_DEG = 10.0;
 const float TURN_TOLERANCE_DEG = 0.5f;
 
-// generous, because it has to clear the slowest legitimate turn, which is a 90
-// degree sweep leg at TURN_VELOCITY_PCT. tripping this ends the run outright,
-// so it is set to catch a jammed robot rather than to bound a slow one.
+// how near the commanded odometer reading a drive has to land to count as
+// arrived. under one sub-cell, which keeps the map and the pose in agreement about
+// which cell the robot is in.
+const float DRIVE_TOLERANCE_CM = 0.3f;
+
+// --- timeouts ----------------------------------------------------------------
+
+const int32_t MOTION_TIMEOUT_SEC = 10;
+
 const uint32_t TURN_TIMEOUT_MS = 12000;
 
-// the inertial sensor keeps reporting the previous calibration state for a
-// moment after one is requested, so the wait has to start after a short delay
-// or it falls straight through.
-const uint32_t IMU_SETTLE_MS = 100;
-const uint32_t IMU_CALIBRATE_TIMEOUT_MS = 5000;
+// last-resort timeout
+// nothing the algorithm asks for should take this long:
+// the drivetrain gives up on a drive after MOTION_TIMEOUT_SEC and a turn
+// after TURN_TIMEOUT_MS. past this the motion gets declared over and the poll
+// loop ends. it sits above TURN_TIMEOUT_MS deliberately, otherwise a stuck turn
+// would trip this instead of being reported properly
+const uint32_t MOTION_CAP_MS = 20000;
 
 // --- polling -----------------------------------------------------------------
 
-// the sampling rate of the whole system. one sensor reading, one pose update
-// and one map update per tick.
+// the sampling rate of the whole system
+// each tick is one sensor reading, one pose update and one map update
 //
-// this is what we ask for, not what we get. markFree() costs far more per call
+// this is ideal, not necessarily accurate. markFree() costs far more per call
 // than the sleep does, so the real tick period is however long that takes.
 const uint32_t POLL_MS = 5;
 
 // the drivetrain reports itself stopped in the window between a motion being
-// commanded and the motors spinning up, which would end a poll loop before it
-// began.
+// commanded and the motors spinning up, which was ending poll loops before they began
+//
+// this was a bug we had to fix at the last minute
 const uint32_t MOTION_GRACE_MS = 60;
-
-// a drive making less headway than this, for this long, is pushing against
-// something. neither value is critical: the point is to end the run rather than
-// grind, and to stay well clear of what the drivetrain produces while it is
-// still accelerating.
 const float STALL_SPEED_CM_PER_S = 2.0f;
 const uint32_t STALL_WINDOW_MS = 250;
 
@@ -94,25 +94,10 @@ const int STALL_TICKS = static_cast<int>(STALL_WINDOW_MS / POLL_MS);
 
 // --- logging -----------------------------------------------------------------
 
-// the map display owns the screen, so log lines go out over usb only. turn this
-// on and it draws over the map. worse, drawMap() calls render(), which puts the
-// screen into double buffering: text written between frames waits for the next
-// one before it appears at all.
+// debug logs
 const bool LOG_TO_SCREEN = false;
 const int LOG_FIRST_ROW = 1;
 const int LOG_LAST_ROW = 6;
-
-// last-resort backstop. nothing the algorithm asks for legitimately takes this
-// long: the drivetrain gives up on a drive after MOTION_TIMEOUT_SEC and a turn
-// after TURN_TIMEOUT_MS. past this the motion gets declared over and the poll
-// loop ends. it sits above TURN_TIMEOUT_MS deliberately, otherwise a stuck turn
-// would trip this instead of being reported as the stuck turn it is.
-const uint32_t MOTION_CAP_MS = 20000;
-
-// how near the commanded odometer reading a drive has to land to count as
-// arrived. under one sub-cell, which keeps the map and the pose agreeing about
-// which cell the robot is in.
-const float DRIVE_TOLERANCE_CM = 0.3f;
 
 // --- helpers -----------------------------------------------------------------
 
@@ -128,36 +113,36 @@ float normalizeDeg(float deg) {
   return deg;
 }
 
-// shortest signed way round from one heading to another. averaging two headings
-// either side of north would otherwise swing the pose halfway round the board.
+// shortest signed angle from one heading to another. averaging two headings
+// either side of north would otherwise swing the pose halfway around the board.
+//
+// fmodf for this is a little cursed though I can't lie
 float shortestDeltaDeg(float from, float to) {
   return fmodf(to - from + 540.0f, FULL_TURN_DEG) - 180.0f;
 }
 
 }  // namespace
 
-VexRobot::VexRobot(const Vec2& startPosition, float startHeadingDeg,
-                   const Goal& goal)
-    : leftMotor_(LEFT_MOTOR_PORT, LEFT_MOTOR_REVERSED),
-      rightMotor_(RIGHT_MOTOR_PORT, RIGHT_MOTOR_REVERSED),
-      imu_(),
-      drive_(leftMotor_, rightMotor_, imu_, WHEEL_TRAVEL_CM, TRACK_WIDTH_CM,
-             WHEEL_BASE_CM, vex::distanceUnits::cm, EXTERNAL_GEAR_RATIO),
-      range_(DISTANCE_SENSOR_PORT),
-      position_(startPosition),
-      headingDeg_(normalizeDeg(startHeadingDeg)),
-      goal_(goal),
-      odometerCm_(0.0f),
-      tickTravelCm_(0.0f),
-      turnTargetDeg_(0.0f),
-      turning_(false),
-      turnSign_(1.0f),
-      driveTargetCm_(0.0f),
-      motionStartMs_(0),
-      motionIsDrive_(false),
-      stalledTicks_(0),
-      finished_(false),
-      logRow_(LOG_FIRST_ROW) {}
+VexRobot::VexRobot(const Vec2& startPosition, float startHeadingDeg, const Goal& goal) :
+    leftMotor_(LEFT_MOTOR_PORT, LEFT_MOTOR_REVERSED),
+    rightMotor_(RIGHT_MOTOR_PORT, RIGHT_MOTOR_REVERSED),
+    imu_(),
+    drive_(leftMotor_, rightMotor_, imu_, WHEEL_TRAVEL_CM, TRACK_WIDTH_CM, WHEEL_BASE_CM, vex::distanceUnits::cm, EXTERNAL_GEAR_RATIO),
+    range_(DISTANCE_SENSOR_PORT),
+    position_(startPosition),
+    headingDeg_(normalizeDeg(startHeadingDeg)),
+    goal_(goal),
+    odometerCm_(0.0f),
+    tickTravelCm_(0.0f),
+    turnTargetDeg_(0.0f),
+    turning_(false),
+    turnSign_(1.0f),
+    driveTargetCm_(0.0f),
+    motionStartMs_(0),
+    motionIsDrive_(false),
+    stalledTicks_(0),
+    finished_(false),
+    logRow_(LOG_FIRST_ROW) {}
 
 bool VexRobot::devicesReady() {
   bool driveable = true;
@@ -173,9 +158,10 @@ bool VexRobot::devicesReady() {
     log("no inertial sensor");
     driveable = false;
   }
-  // it can still be driven without a range sensor. it just never learns
-  // anything. warning, not a reason to refuse to start.
-  if (!range_.installed()) log("warn: no distance sensor");
+  if (!range_.installed()) {
+    log("no distance sensor");
+    driveable = false;
+  }
   return driveable;
 }
 
@@ -228,7 +214,7 @@ Vec2 VexRobot::position() { return position_; }
 float VexRobot::heading() { return headingDeg_; }
 
 float VexRobot::distance() {
-  // read live rather than caching: the algorithm samples the range between
+  // read live to sample the range between
   // polling ticks as well as on them, and a stale reading would clear sub-cells
   // the robot has already turned away from.
   if (!range_.isObjectDetected()) return INFINITY;
@@ -259,11 +245,8 @@ void VexRobot::updatePose() {
   headingDeg_ =
       normalizeDeg(static_cast<float>(imu_.heading(vex::rotationUnits::deg)));
 
-  // travel over a tick is attributed to the heading halfway through it, which
-  // costs nothing and keeps the pose honest if it is ever driving and turning
-  // at the same time.
-  const float midDeg =
-      previousDeg + 0.5f * shortestDeltaDeg(previousDeg, headingDeg_);
+  // travel over a tick is attributed to the heading halfway through it
+  const float midDeg = previousDeg + 0.5f * shortestDeltaDeg(previousDeg, headingDeg_);
   const float radians = midDeg * DEG_TO_RAD;
   position_.x += tickTravelCm_ * sinf(radians);
   position_.y += tickTravelCm_ * cosf(radians);
@@ -288,26 +271,26 @@ void VexRobot::startTurnTo(float headingDeg) {
   motionIsDrive_ = false;
   stalledTicks_ = 0;
   motionStartMs_ = vex::timer::system();
-  // absolute, not relative. each turn corrects whatever error the last one left
+  // absolute, not relative; each turn corrects whatever error the last one left
   // behind instead of carrying it forward.
   turnTargetDeg_ = normalizeDeg(headingDeg);
   turnSign_ =
       shortestDeltaDeg(headingDeg_, turnTargetDeg_) >= 0.0f ? 1.0f : -1.0f;
   turning_ = true;
   // kick the motors now, not on the first poll. a caller that checks isMoving()
-  // before stepping needs to see a turn that is genuinely underway.
+  // before stepping needs to see a turn underway.
   serviceTurn();
 }
 
 void VexRobot::serviceTurn() {
   if (!turning_) return;
 
-  // how much of the arc is left in the direction the turn set out in. once this
-  // goes negative the target has been passed, which counts as done rather than
-  // a reason to come back for it: the next turn is commanded against an
-  // absolute heading and absorbs the overshoot.
-  const float remainingDeg =
-      turnSign_ * shortestDeltaDeg(headingDeg_, turnTargetDeg_);
+  // how much of the arc is left in the direction the turn set out in
+  // once this goes negative the target has been passed, which counts as done.
+  // the next turn is commanded against an absolute heading and absorbs the overshoot.
+  //
+  // nevertheless, I suspect this is part of the reason our robot was turning past 90 degrees, we just didn't have time to fix this
+  const float remainingDeg = turnSign_ * shortestDeltaDeg(headingDeg_, turnTargetDeg_);
   if (remainingDeg <= TURN_TOLERANCE_DEG) {
     drive_.stop();
     turning_ = false;
@@ -318,27 +301,24 @@ void VexRobot::serviceTurn() {
     return;
   }
 
-  const double velocity =
-      remainingDeg > TURN_APPROACH_DEG ? TURN_VELOCITY_PCT : TURN_CRAWL_PCT;
-  drive_.turn(turnSign_ > 0.0f ? vex::turnType::right : vex::turnType::left,
-              velocity, vex::velocityUnits::pct);
+  const double velocity = remainingDeg > TURN_APPROACH_DEG ? TURN_VELOCITY_PCT : TURN_CRAWL_PCT;
+  drive_.turn(turnSign_ > 0.0f ? vex::turnType::right : vex::turnType::left, velocity, vex::velocityUnits::pct);
 }
 
 // whether the robot is still working on the last motion it was given.
 //
-// the drivetrain's own isMoving() is not the authority here. once a turn has
+// the drivetrain's own isMoving() is not the source of truth here. once a turn has
 // been issued as a velocity command it reports itself as moving for the rest of
-// the run, even after stop(), so trusting it left every sweep leg polling until
-// it timed out. it is only consulted where it is trustworthy: a drive reporting
-// itself done really is done, it is the never-done answer that has to be
-// ignored.
+// the run, even after stop(), during testing we realized that trusting it left every sweep leg polling until
+// it timed out. To mitigate this, it is only consulted where it is trustworthy: a drive reporting
+// itself done really is done, it is the never-done answer that has to be ignored
 bool VexRobot::isMoving() {
   if (finished_) return false;
 
   const uint32_t elapsedMs = vex::timer::system() - motionStartMs_;
 
-  // the algorithm polls this in loops it owns. a motion that never reports
-  // itself done would hang the run outright.
+  // the algorithm polls this in loops it owns
+  // WARNING: a motion that never reports itself done will hang
   if (elapsedMs > MOTION_CAP_MS) {
     if (turning_ || motionIsDrive_) {
       drive_.stop();
@@ -348,7 +328,6 @@ bool VexRobot::isMoving() {
     return false;
   }
 
-  // serviceTurn() owns a turn start to finish. its flag is the whole answer.
   if (!motionIsDrive_) return turning_;
 
   if (elapsedMs < MOTION_GRACE_MS) return true;
@@ -404,7 +383,7 @@ void VexRobot::log(const char* message) {
     Brain.Screen.clearLine(logRow_);
     Brain.Screen.setCursor(logRow_, 1);
     Brain.Screen.print("%s", message);
-    // wrap within the log rows so the block does not walk off the screen.
+    // wrap within the log rows so the block does not clip off the screen
     if (++logRow_ > LOG_LAST_ROW) logRow_ = LOG_FIRST_ROW;
   }
   printf("%s\n", message);

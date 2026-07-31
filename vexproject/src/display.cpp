@@ -28,8 +28,8 @@ const int MAP_Y0 = (SCREEN_H - ROWS) / 2;
 const uint32_t MAP_REFRESH_MS = 250;
 uint32_t lastMapDrawMs = 0;
 
-// the waypoint list printed as text. When SHOW_WAYPOINTS is false, the scan maps are drawn instead
-const bool SHOW_WAYPOINTS = false;
+// print the waypoint list at the end of the program
+const bool SHOW_WAYPOINTS = true;
 const int WAYPOINT_FIRST_ROW = 1;
 const int WAYPOINT_LAST_ROW = 6;
 

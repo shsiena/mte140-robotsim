@@ -11,7 +11,7 @@ void drawMap(IRobot& robot);
 // forces the next drawMap() to repaint
 void invalidateMap();
 
-// prints the waypoint trail as text. off by default, see SHOW_WAYPOINTS
+// prints the waypoint trail as text, see SHOW_WAYPOINTS
 void drawWaypoints(const LinkedList& waypoints);
 
 #endif  // ROBOT_DISPLAY_H

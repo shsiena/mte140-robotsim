@@ -21,8 +21,6 @@
 
 class VexRobot : public IRobot {
   public:
-    // the start pose is the algorithm's only fixed point. it has to be measured
-    // off the board and passed in. the goal is known from the start.
     VexRobot(const Vec2& startPosition, float startHeadingDeg, const Goal& goal);
 
     // calibrates the inertial sensor and zeroes the odometry against the start
@@ -45,18 +43,14 @@ class VexRobot : public IRobot {
     virtual void log(const char* message);
 
   private:
-    // total signed wheel travel since begin(), averaged over both sides.
     float odometerCm();
-    // fold the travel and heading accrued since the last call into the pose.
     void updatePose();
     // nudge the live turn one tick closer to its target, or stop it if it has
     // arrived. see the note on TURN_CRAWL_PCT in robot.cpp for why turns are
     // closed here rather than by the drivetrain.
     void serviceTurn();
-    // logs anything missing. false if what is missing makes the run pointless.
     bool devicesReady();
     void endRun(const char* reason);
-    // a drive that commands motion but produces none has hit something.
     void checkForCollision();
     void checkForGoal();
 
@@ -73,7 +67,6 @@ class VexRobot : public IRobot {
     Goal goal_;
 
     float odometerCm_;
-    // travel over the last polling tick, which is what stall detection watches.
     float tickTravelCm_;
 
     // absolute heading the live turn is aiming at, whether there is one, and
@@ -84,15 +77,8 @@ class VexRobot : public IRobot {
     bool turning_;
     float turnSign_;
 
-    // odometer reading the live drive is aiming at. a drive is done when the
-    // odometer arrives, which is a reading this class owns, rather than when the
-    // drivetrain says so.
     float driveTargetCm_;
 
-    // when the current motion was commanded. the drivetrain does not report
-    // itself moving until the motors actually spin up, hence the grace period in
-    // isMoving(): for the first few ticks a motion counts as live whatever the
-    // drivetrain claims.
     uint32_t motionStartMs_;
     // whether the live motion is a drive. turns are exempt from stall detection,
     // since a turn in place is supposed to produce no travel.
