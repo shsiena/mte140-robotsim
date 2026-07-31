@@ -3,10 +3,10 @@
 
 class IRobot;
 
-// Explore an unknown board and drive to the goal, returning once the goal is
-// reached, the robot is stuck, or the step budget runs out. All of the maps it
-// works with are statically allocated inside program.cpp; nothing is allocated
-// here or on the caller's stack.
+// explore an unknown board and drive to the goal, returning once the goal is
+// reached, the robot is stuck, or the step budget runs out. every map it works
+// with is statically allocated in program.cpp, so the only thing this ever puts
+// on the heap is the waypoint list.
 void run(IRobot& robot);
 
 #endif  // ROBOT_PROGRAM_H

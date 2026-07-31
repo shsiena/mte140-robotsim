@@ -4,15 +4,17 @@
 #include <stdint.h>
 #include <string.h>
 
-// A fixed-size boolean map, one bit per sub-cell, packed into 32-bit words and
-// stored row-major with cy = 0 as the bottom row. Sized entirely from template
+// a fixed-size boolean map, one bit per sub-cell, packed into 32-bit words and
+// stored row-major with cy = 0 as the bottom row. sized entirely from template
 // parameters, so instances live in .bss and nothing is ever allocated.
 //
-// Reads outside the grid report false, matching the simulator's BoolGrid:
-// off-board space reads as free.
+// reads outside the grid report false, which is inherited from the simulator
+// where the board edge was also the world edge. on the real board it is wrong:
+// false means clear in the occupancy map, so anything sitting past the modelled
+// edge is invisible to the clearance masks. see the note on BOARD_COLS.
 template <int COLS, int ROWS>
 class BitGrid {
- public:
+  public:
   void fill(bool value) { memset(words_, value ? 0xFF : 0x00, sizeof(words_)); }
 
   bool get(int cx, int cy) const {
@@ -30,11 +32,11 @@ class BitGrid {
     }
   }
 
-  // True if any bit in row cy between xLo and xHi inclusive is set.
+  // true if any bit in row cy between xLo and xHi inclusive is set.
   //
-  // Testing a span of up to 32 sub-cells per word operation is what makes the
-  // clearance masks affordable: a mask row costs a handful of word tests
-  // rather than one lookup per sub-cell it covers.
+  // testing up to 32 sub-cells per word operation is what makes the clearance
+  // masks affordable: a mask row costs a few word tests rather than one lookup
+  // per sub-cell it covers.
   bool anySetInRange(int cy, int xLo, int xHi) const {
     if (cy < 0 || cy >= ROWS) return false;
     if (xLo < 0) xLo = 0;
@@ -55,11 +57,11 @@ class BitGrid {
     return (row[hiWord] & hiMask) != 0;
   }
 
- private:
-  // Rows are padded out to a whole number of words. Padding bits are never
-  // reachable through the accessors above, which clamp to COLS first.
-  enum { WORDS_PER_ROW = (COLS + 31) / 32 };
-  uint32_t words_[ROWS][WORDS_PER_ROW];
+  private:
+    // rows are padded out to a whole number of words. the padding bits are never
+    // reachable through the accessors above, which clamp to COLS first.
+    enum { WORDS_PER_ROW = (COLS + 31) / 32 };
+    uint32_t words_[ROWS][WORDS_PER_ROW];
 };
 
 #endif  // ROBOT_BITGRID_H
