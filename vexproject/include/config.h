@@ -31,8 +31,9 @@ constexpr int GRID_ROWS = BOARD_ROWS * GRID_RESOLUTION_PER_CELL;
 constexpr double ROBOT_LENGTH_CM = 22.0;
 constexpr double ROBOT_WIDTH_CM = 16.0;
 
-// we estimated the robot turns about a point two thirds of the way forward rather than about its
-// centre, so the rear overhang sets the turning circle. that pivot point is what every coordinate refers to
+// we estimated the robot turns about a point two thirds of the way forward,
+// not about its centre, so the rear overhang sets the turning circle. that
+// pivot point is what every coordinate refers to
 constexpr double PIVOT_FROM_REAR_CM = ROBOT_LENGTH_CM * 2.0 / 3.0;
 constexpr double PIVOT_TO_FRONT_CM = ROBOT_LENGTH_CM - PIVOT_FROM_REAR_CM;
 
@@ -42,8 +43,9 @@ constexpr double SENSOR_RIGHT_CM = 0.0;
 constexpr double SENSOR_CONE_DEG = 24.19;
 constexpr double SENSOR_HALF_CONE_DEG = SENSOR_CONE_DEG / 2.0;
 
-// how far out we trust the sensor. the hardware reaches roughly 80in, but we deliberately capped this 
-// to try and account for larger error at longer distances 
+// how far out we trust the sensor. the hardware reaches roughly 80in, but we
+// deliberately capped this to try and account for larger error at longer
+// distances
 constexpr double SENSOR_TRUST_CM = 80.0;
 
 // padding added to the body on every side before it is tested against the map,
@@ -51,7 +53,8 @@ constexpr double SENSOR_TRUST_CM = 80.0;
 constexpr double SAFETY_CM = 1.0;
 
 // trimmed off a range reading before the space in front of it is cleared
-// this is deliberately conservative, but we would rather be overly cautious than bump into an obstacle
+// this is deliberately conservative, but we would rather be overly cautious
+// than bump into an obstacle
 constexpr double CLEAR_MARGIN_CM = 1.5;
 
 // shortest move worth planning

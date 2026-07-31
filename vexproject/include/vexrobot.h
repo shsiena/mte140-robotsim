@@ -21,7 +21,8 @@
 
 class VexRobot : public IRobot {
   public:
-    VexRobot(const Vec2& startPosition, float startHeadingDeg, const Goal& goal);
+    VexRobot(const Vec2& startPosition, float startHeadingDeg,
+             const Goal& goal);
 
     // calibrates the inertial sensor and zeroes the odometry against the start
     // pose. blocks for a couple of seconds and has to be called with the robot
@@ -71,8 +72,8 @@ class VexRobot : public IRobot {
 
     // absolute heading the live turn is aiming at, whether there is one, and
     // which way round it is going. the direction is latched when the turn is
-    // commanded and never revisited: re-deriving it from the live error means the
-    // first overshoot reverses the motors and it oscillates instead of settling.
+    // commanded and never revisited. re-derive it from the live error and the
+    // first overshoot reverses the motors into an oscillation.
     float turnTargetDeg_;
     bool turning_;
     float turnSign_;
@@ -80,8 +81,8 @@ class VexRobot : public IRobot {
     float driveTargetCm_;
 
     uint32_t motionStartMs_;
-    // whether the live motion is a drive. turns are exempt from stall detection,
-    // since a turn in place is supposed to produce no travel.
+    // whether the live motion is a drive. turns are exempt from stall
+    // detection, since a turn in place is supposed to produce no travel.
     bool motionIsDrive_;
     int stalledTicks_;
 

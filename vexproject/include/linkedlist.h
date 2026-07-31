@@ -53,7 +53,9 @@ class LinkedList {
     const Node* last() const { return tail_; }
     uint8_t size() const { return numNodes_; }
 
-    // cause a compiler error if the copy constructor or assignment operator is called on this class to prevent use after free and nullptr dereference bugs
+    // cause a compiler error if the copy constructor or assignment operator is
+    // called on this class, to prevent use after free and nullptr dereference
+    // bugs
     LinkedList(const LinkedList&) = delete;
     LinkedList& operator=(const LinkedList&) = delete;
 

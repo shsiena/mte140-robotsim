@@ -7,9 +7,9 @@
 //               knowledge grows and never retracts.
 //   clearance   four maps saying which body poses fit where, each built by
 //               testing occupancy against a precomputed swept-footprint mask.
-//   route       a dynamic program (literally) over the clearance maps that minimises 90
-//               degree turns, since every monotone route is the same length and
-//               turns are the only cost that varies.
+//   route       a dynamic program (literally) over the clearance maps. every
+//               monotone route is the same length, so turns are the only cost
+//               that varies and the search minimises them.
 
 #include "program.h"
 
@@ -63,10 +63,9 @@ bool withinGoal(const Goal& goal, const Vec2& p) {
 
 // --- clearance --------------------------------------------------------------
 
-// each mask row is one unbroken span, which drops a whole row of the footprint
-// to a few word compares instead of a lookup per sub-cell. the rows run
-// outwards from the pivot, so an obstacle right alongside the robot rejects on
-// the first few spans.
+// each mask row is one unbroken span, so a whole row of the footprint costs a
+// few word compares. rows run outwards from the pivot: an obstacle right
+// alongside the robot rejects on the first few spans.
 bool isClear(int cx, int cy, const masks::Mask& mask) {
   for (int k = 0; k < mask.count; k++) {
     const masks::Row& row = mask.rows[k];
@@ -94,8 +93,8 @@ void computeClearance() {
 
 // --- route planning ---------------------------------------------------------
 
-// a monotone route turns at most once per row and column. the count fits a byte
-// with room to spare, which leaves the top value free to mean unreachable.
+// a monotone route turns at most once per row and column, so the count fits a
+// byte with room to spare. 255 is free to mean unreachable.
 const uint8_t NO_ROUTE = 255;
 
 // longest staircase across the board, plus its starting cell.
@@ -110,8 +109,8 @@ struct Candidate {
 };
 
 // turn costs for the column being swept and the one before it. the recurrence
-// only ever looks one column back. the simulator keeps the full width by height
-// tables, which here would be kilobytes of ram holding results read once.
+// only ever looks one column back. the simulator keeps full width by height
+// tables; on the brain that is kilobytes of ram for results read once.
 uint8_t previousEast[ROWS + 1];
 uint8_t previousNorth[ROWS + 1];
 uint8_t currentEast[ROWS + 1];
@@ -188,7 +187,9 @@ bool planRoute(IRobot& r, Route& route) {
   const Cell start = cellAt(here.x, here.y);
   if (!turn90.get(start.cx, start.cy)) return false;
 
-  const Goal goal = r.goal(); // having the robot object own the goal was a questionable choice in retrospect, it's a holdover from the simulator API
+  // having the robot object own the goal was a questionable choice in
+  // retrospect, it's a holdover from the simulator API
+  const Goal goal = r.goal();
   const Cell goalCentre = cellAt(goal.x, goal.y);
   const int pad = static_cast<int>(ceilf(goal.radius / SUBCELL_CM));
   const int width = clamp(goalCentre.cx + pad, 0, COLS - 1) - start.cx;
@@ -332,7 +333,7 @@ Vec2 sensorOrigin(IRobot& r) {
   return origin;
 }
 
-// is this point inside the cone the sensor can see? 
+// is this point inside the cone the sensor can see?
 // called on sub-cell corners
 bool inWedge(float dx, float dy, float forwardX, float forwardY, float reachSq,
              float cosHalfConeSq) {
@@ -348,11 +349,13 @@ bool inWedge(float dx, float dy, float forwardX, float forwardY, float reachSq,
 //
 // this assumes the sensor behaves ideally. a real one drops returns off angled
 // or dark surfaces, and since occupancy only ever clears, one missed return
-// marks a wall as free permanently. we ran out of time to work out a mitigation.
+// marks a wall as free permanently. we ran out of time to work out a
+// mitigation.
 //
-// the bounding box below is the full reach square rather than the cone's actual
-// extent, so this rasterises far more of the grid than it needs to. it is the
-// most expensive thing in the polling loop by a wide margin, but it still runs in a reasonable amount of time, soooooo... it's fine :)
+// the bounding box below is the full reach square, not the cone's actual
+// extent, so this rasterises far more of the grid than it needs to. most
+// expensive thing in the polling loop by a wide margin, but it still runs in a
+// reasonable amount of time, soooooo... it's fine :)
 void markFree(IRobot& r) {
   const Vec2 origin = sensorOrigin(r);
   const float measured = r.distance();
@@ -401,8 +404,10 @@ void markFree(IRobot& r) {
 // assumes the robot was placed with room to spin
 void clearStartZone(IRobot& r) {
   const Vec2 p = r.position();
-  const Cell lo = cellAt(p.x - START_CLEAR_RADIUS_CM, p.y - START_CLEAR_RADIUS_CM);
-  const Cell hi = cellAt(p.x + START_CLEAR_RADIUS_CM, p.y + START_CLEAR_RADIUS_CM);
+  const Cell lo =
+      cellAt(p.x - START_CLEAR_RADIUS_CM, p.y - START_CLEAR_RADIUS_CM);
+  const Cell hi =
+      cellAt(p.x + START_CLEAR_RADIUS_CM, p.y + START_CLEAR_RADIUS_CM);
   const float radiusSq = START_CLEAR_RADIUS_CM * START_CLEAR_RADIUS_CM;
   for (int cy = lo.cy; cy <= hi.cy; cy++) {
     for (int cx = lo.cx; cx <= hi.cx; cx++) {
@@ -434,8 +439,8 @@ void turnScanning(IRobot& r, float headingDeg) {
   whileMoving(r);
 }
 
-// a settled turn leaves a bit of residual error, and the heading wraps. an
-// exact compare would report a turn on every leg of the route.
+// a settled turn leaves a bit of residual error, and the heading wraps. exact
+// compares are useless here.
 const float HEADING_EPS_DEG = 1.0f;
 
 bool headingIs(float headingDeg, float targetDeg) {
@@ -444,16 +449,19 @@ bool headingIs(float headingDeg, float targetDeg) {
   return diff <= HEADING_EPS_DEG;
 }
 
-// biggest arc we can command as one turn. turns go to an absolute heading, so
-// "here plus a full circle" would just mean stay put.
+// biggest arc we can command as one turn. turns go to an absolute heading:
+// "here plus a full circle" is the heading we are already at.
 const float SWEEP_LEG_DEG = 90.0f;
 
 // rotate through an arc, reading the sensor the whole way around
 //
-// one continuous rotation, not a stop at each heading. the robot is never asked to settle
-// NOTE: We had to figure this out after porting the algorithm, smartdrive seems to use PID or
-// something that causes it to get stuck if you repeatedly command it to make 1-degree turns
-// 
+// one continuous rotation, not a stop at each heading. the robot is never
+// asked to settle.
+//
+// NOTE: We had to figure this out after porting the algorithm, smartdrive
+// seems to use PID or something that causes it to get stuck if you repeatedly
+// command it to make 1-degree turns
+//
 // whileMoving() samples the sensor the entire time. long arcs only get split
 // into legs because of the limit above, and every leg goes the same way round,
 // so it never doubles back on itself.
@@ -512,8 +520,8 @@ void explore(IRobot& r, LinkedList& waypoints) {
     scan(r);
     if (r.finished()) return;
     computeClearance();
-    // the derived maps have just been rebuilt, so this is the one repaint that
-    // shows the planner's view rather than the sensor's.
+    // the derived maps have just been rebuilt. this is the one repaint per
+    // step that shows the planner's view, not the sensor's.
     invalidateMap();
     drawMap(r);
     if (withinGoal(r.goal(), r.position())) {

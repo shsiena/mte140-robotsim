@@ -58,8 +58,8 @@ class BitGrid {
   }
 
   private:
-    // rows are padded out to a whole number of words. the padding bits are never
-    // reachable through the accessors above, which clamp to COLS first.
+    // rows are padded out to a whole number of words. the padding bits are
+    // never reachable through the accessors above, which clamp to COLS first.
     enum { WORDS_PER_ROW = (COLS + 31) / 32 };
     uint32_t words_[ROWS][WORDS_PER_ROW];
 };

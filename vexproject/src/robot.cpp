@@ -36,14 +36,15 @@ const uint32_t IMU_CALIBRATE_TIMEOUT_MS = 5000;
 //
 // turn velocity also sets how finely a sweep is sampled, since the sensor is
 // read once per tick throughout: halving it doubles the readings per degree of
-// arc. if a turn ever fails to start from rest, this has likely been set below what it
-// takes to overcome static friction.
+// arc. if a turn ever fails to start from rest, this has likely been set below
+// what it takes to overcome static friction.
 const double DRIVE_VELOCITY_PCT = 40.0;
 const double TURN_VELOCITY_PCT = 12.0;
 
-// turns are closed against the inertial sensor here rather than handed to
-// smartdrive::turnToHeading, which has some sort of PID loop, seeming to scale motor velocity by the heading error.
-// near the target that comes out under what it takes to break static friction
+// turns are closed against the inertial sensor here, not handed to
+// smartdrive::turnToHeading, which has some sort of PID loop that seems to
+// scale motor velocity by the heading error. near the target that comes out
+// under what it takes to break static friction
 //
 // this had to be figured out at the last minute :/
 const double TURN_CRAWL_PCT = 9.0;
@@ -53,8 +54,8 @@ const double TURN_APPROACH_DEG = 10.0;
 const float TURN_TOLERANCE_DEG = 0.5f;
 
 // how near the commanded odometer reading a drive has to land to count as
-// arrived. under one sub-cell, which keeps the map and the pose in agreement about
-// which cell the robot is in.
+// arrived. under one sub-cell, so the map and the pose always agree on which
+// cell the robot is in.
 const float DRIVE_TOLERANCE_CM = 0.3f;
 
 // --- timeouts ----------------------------------------------------------------
@@ -67,8 +68,8 @@ const uint32_t TURN_TIMEOUT_MS = 12000;
 // nothing the algorithm asks for should take this long:
 // the drivetrain gives up on a drive after MOTION_TIMEOUT_SEC and a turn
 // after TURN_TIMEOUT_MS. past this the motion gets declared over and the poll
-// loop ends. it sits above TURN_TIMEOUT_MS deliberately, otherwise a stuck turn
-// would trip this instead of being reported properly
+// loop ends. keep it above TURN_TIMEOUT_MS so a stuck turn trips the turn
+// timeout and gets reported properly.
 const uint32_t MOTION_CAP_MS = 20000;
 
 // --- polling -----------------------------------------------------------------
@@ -81,7 +82,8 @@ const uint32_t MOTION_CAP_MS = 20000;
 const uint32_t POLL_MS = 5;
 
 // the drivetrain reports itself stopped in the window between a motion being
-// commanded and the motors spinning up, which was ending poll loops before they began
+// commanded and the motors spinning up, which was ending poll loops before
+// they began
 //
 // this was a bug we had to fix at the last minute
 const uint32_t MOTION_GRACE_MS = 60;
@@ -113,8 +115,8 @@ float normalizeDeg(float deg) {
   return deg;
 }
 
-// shortest signed angle from one heading to another. averaging two headings
-// either side of north would otherwise swing the pose halfway around the board.
+// shortest signed angle from one heading to another. straight averaging across
+// north swings the pose halfway around the board.
 //
 // fmodf for this is a little cursed though I can't lie
 float shortestDeltaDeg(float from, float to) {
@@ -123,11 +125,13 @@ float shortestDeltaDeg(float from, float to) {
 
 }  // namespace
 
-VexRobot::VexRobot(const Vec2& startPosition, float startHeadingDeg, const Goal& goal) :
+VexRobot::VexRobot(const Vec2& startPosition, float startHeadingDeg,
+                   const Goal& goal) :
     leftMotor_(LEFT_MOTOR_PORT, LEFT_MOTOR_REVERSED),
     rightMotor_(RIGHT_MOTOR_PORT, RIGHT_MOTOR_REVERSED),
     imu_(),
-    drive_(leftMotor_, rightMotor_, imu_, WHEEL_TRAVEL_CM, TRACK_WIDTH_CM, WHEEL_BASE_CM, vex::distanceUnits::cm, EXTERNAL_GEAR_RATIO),
+    drive_(leftMotor_, rightMotor_, imu_, WHEEL_TRAVEL_CM, TRACK_WIDTH_CM,
+           WHEEL_BASE_CM, vex::distanceUnits::cm, EXTERNAL_GEAR_RATIO),
     range_(DISTANCE_SENSOR_PORT),
     position_(startPosition),
     headingDeg_(normalizeDeg(startHeadingDeg)),
@@ -214,9 +218,8 @@ Vec2 VexRobot::position() { return position_; }
 float VexRobot::heading() { return headingDeg_; }
 
 float VexRobot::distance() {
-  // read live to sample the range between
-  // polling ticks as well as on them, and a stale reading would clear sub-cells
-  // the robot has already turned away from.
+  // read live, not off a value cached on the last tick. a sweep needs range
+  // samples between polling ticks as well as on them.
   if (!range_.isObjectDetected()) return INFINITY;
   const float cm =
       static_cast<float>(range_.objectDistance(vex::distanceUnits::mm)) * 0.1f;
@@ -246,7 +249,8 @@ void VexRobot::updatePose() {
       normalizeDeg(static_cast<float>(imu_.heading(vex::rotationUnits::deg)));
 
   // travel over a tick is attributed to the heading halfway through it
-  const float midDeg = previousDeg + 0.5f * shortestDeltaDeg(previousDeg, headingDeg_);
+  const float midDeg =
+      previousDeg + 0.5f * shortestDeltaDeg(previousDeg, headingDeg_);
   const float radians = midDeg * DEG_TO_RAD;
   position_.x += tickTravelCm_ * sinf(radians);
   position_.y += tickTravelCm_ * cosf(radians);
@@ -271,8 +275,8 @@ void VexRobot::startTurnTo(float headingDeg) {
   motionIsDrive_ = false;
   stalledTicks_ = 0;
   motionStartMs_ = vex::timer::system();
-  // absolute, not relative; each turn corrects whatever error the last one left
-  // behind instead of carrying it forward.
+  // absolute, not relative. each turn corrects whatever error the last one
+  // left behind.
   turnTargetDeg_ = normalizeDeg(headingDeg);
   turnSign_ =
       shortestDeltaDeg(headingDeg_, turnTargetDeg_) >= 0.0f ? 1.0f : -1.0f;
@@ -287,10 +291,13 @@ void VexRobot::serviceTurn() {
 
   // how much of the arc is left in the direction the turn set out in
   // once this goes negative the target has been passed, which counts as done.
-  // the next turn is commanded against an absolute heading and absorbs the overshoot.
+  // the next turn is commanded against an absolute heading and absorbs the
+  // overshoot.
   //
-  // nevertheless, I suspect this is part of the reason our robot was turning past 90 degrees, we just didn't have time to fix this
-  const float remainingDeg = turnSign_ * shortestDeltaDeg(headingDeg_, turnTargetDeg_);
+  // nevertheless, I suspect this is part of the reason our robot was turning
+  // past 90 degrees, we just didn't have time to fix this
+  const float remainingDeg =
+      turnSign_ * shortestDeltaDeg(headingDeg_, turnTargetDeg_);
   if (remainingDeg <= TURN_TOLERANCE_DEG) {
     drive_.stop();
     turning_ = false;
@@ -301,17 +308,20 @@ void VexRobot::serviceTurn() {
     return;
   }
 
-  const double velocity = remainingDeg > TURN_APPROACH_DEG ? TURN_VELOCITY_PCT : TURN_CRAWL_PCT;
-  drive_.turn(turnSign_ > 0.0f ? vex::turnType::right : vex::turnType::left, velocity, vex::velocityUnits::pct);
+  const double velocity =
+      remainingDeg > TURN_APPROACH_DEG ? TURN_VELOCITY_PCT : TURN_CRAWL_PCT;
+  drive_.turn(turnSign_ > 0.0f ? vex::turnType::right : vex::turnType::left,
+              velocity, vex::velocityUnits::pct);
 }
 
 // whether the robot is still working on the last motion it was given.
 //
-// the drivetrain's own isMoving() is not the source of truth here. once a turn has
-// been issued as a velocity command it reports itself as moving for the rest of
-// the run, even after stop(), during testing we realized that trusting it left every sweep leg polling until
-// it timed out. To mitigate this, it is only consulted where it is trustworthy: a drive reporting
-// itself done really is done, it is the never-done answer that has to be ignored
+// the drivetrain's own isMoving() is not the source of truth here. once a turn
+// has been issued as a velocity command it reports itself as moving for the
+// rest of the run, even after stop(). during testing we realized that trusting
+// it left every sweep leg polling until it timed out. to mitigate this, it is
+// only consulted where it is trustworthy: a drive reporting itself done really
+// is done, it is the never-done answer that has to be ignored
 bool VexRobot::isMoving() {
   if (finished_) return false;
 

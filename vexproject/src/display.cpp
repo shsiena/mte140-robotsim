@@ -23,8 +23,8 @@ const int SCREEN_H = 128;
 const int MAP_X0 = (SCREEN_W - COLS) / 2;
 const int MAP_Y0 = (SCREEN_H - ROWS) / 2;
 
-// repainting the whole map costs far more than a polling tick does. throttled
-// on a timer instead of redrawn every tick.
+// repainting the whole map costs far more than a polling tick does, so this
+// throttles on a timer.
 const uint32_t MAP_REFRESH_MS = 250;
 uint32_t lastMapDrawMs = 0;
 
@@ -135,8 +135,8 @@ void drawMap(IRobot& r) {
 
   Brain.Screen.clearScreen(vex::color::black);
 
-  // runs of equal class go out as one rectangle each. drawing a row a pixel at
-  // a time would be over 20k draw calls per frame.
+  // runs of equal class go out as one rectangle each. a pixel per draw call
+  // puts the frame over 20k calls.
   for (int cy = 0; cy < ROWS; cy++) {
     int runStart = 0;
     CellClass runClass = classOf(0, cy);

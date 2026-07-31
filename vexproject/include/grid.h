@@ -27,15 +27,18 @@ struct Cell {
 
 // I know I know, global variables bad...
 // however, consider the following:
-//  -> we are writing C-style C++ for an extremely memory-limited embedded platform
+//  -> we are writing C-style C++ for an extremely memory-limited embedded
+//     platform
 //  -> extra classes and heap allocated objects must be avoided at all costs
 //
 //  ...also clean code is a myth, it either works or it doesn't ¯\_(ツ)_/¯
 //
-//  hot take: global variable bugs are a skill issue, I paid for the whole language, I'm going to use the whole language
+//  hot take: global variable bugs are a skill issue, I paid for the whole
+//  language, I'm going to use the whole language
 //  - Simon
 
-// true means blocked or unknown, false means confirmed clear. this algorithm starts with a fully obstructed map and uses markFree to clear open spaces
+// true means blocked or unknown, false means confirmed clear. the map starts
+// fully obstructed and markFree clears open space as the sensor sees it.
 extern Map occupancy;
 
 // which body poses fit where, rebuilt from occupancy after every scan.
@@ -57,7 +60,8 @@ inline float centreOf(int index) {
 }
 
 // this clamps. it does not report out of range, which means a pose that drifts
-// off the modelled board quietly reads as the nearest edge cell. this could be a problem but it is what it is for now
+// off the modelled board quietly reads as the nearest edge cell. this could be
+// a problem but it is what it is for now
 inline Cell cellAt(float x, float y) {
   Cell cell;
   cell.cx = static_cast<uint8_t>(
