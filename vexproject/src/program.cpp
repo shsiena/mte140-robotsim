@@ -514,7 +514,7 @@ void driveRoute(IRobot& r, int cornerCount, LinkedList& waypoints) {
   }
 }
 
-// scan, plan, drive, repeat until one of them says we are done
+// scan, plan, drive, repeat until we either get stuck or reach the goal
 void explore(IRobot& r, LinkedList& waypoints) {
   for (int step = 0; step < config::MAX_STEPS; step++) {
     scan(r);
